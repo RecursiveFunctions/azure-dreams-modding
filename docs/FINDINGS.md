@@ -636,6 +636,38 @@ The record table at `0x800d2fb4` still cannot be edited on disc: `MAIN.BIN` and
 `TOWN.BIN` are compressed (their loads use command `0x60`), so it exists only
 once expanded into RAM. Searching the image for it byte-for-byte finds nothing.
 
+## The south gate, and why travel is still on a shop door
+
+Reaching the twin by leaving Barry's shop works but is obviously a placeholder.
+The natural trigger is the south gate, which in vanilla is scenery — you can
+stand on it and nothing happens. Two things block moving the trigger there, and
+both are worth stating precisely so the next attempt starts ahead.
+
+**A town cannot be entered by a door.** Doors are kind-12 warps and set up
+interior-shaped state; the attempt to force one is documented above and died on
+the companion chunk, which is chosen by code reading RAM-only tables. Arriving
+in a town means arriving through a kind-11 exit, and exits belong to interiors.
+So any trigger has to either be an exit, or solve the kind-12 problem.
+
+The remap hook does not rescue this. The kind-12 route pulled companion chunk
+4126 (27 sectors to `0x8011ac98`) where a town needs 4205 (10 sectors to
+`0x80126804`); the count and destination come from the descriptor, not the
+sector, so substituting the sector alone would read the wrong length to the
+wrong address.
+
+**The town's door table has no gate in it.** All 38 entries load an interior to
+`0x80016000`; entry 0 is a null with zero sectors. The tower is not in it
+either, so walking out of town to the tower is a different mechanism, and that
+mechanism is the model we want. The record naming the tower entrance
+(`{19 sectors -> 0x80016000, 13660}`) appears exactly once on the disc, at LBA
+12809 +0x46c, and is absent from RAM while standing in town — so it belongs to
+the tower's own data and is not what the town consults.
+
+The open question is therefore what triggers the town-to-tower transition, and
+where the map's walkable triggers live. Finding that is the prerequisite for a
+south gate, and the enqueue logger's caller column is the tool for it: walk into
+the tower with the tracer running and look at which code requested 13660.
+
 ## Unused disc space
 
 The disc is nominally full: only 251 of 126,946 sectors are blank. But the

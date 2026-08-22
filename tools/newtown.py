@@ -617,10 +617,18 @@ DIR_ENTRIES = 14
 
 DIALOGUE_DST = 31250
 
-# The town names itself in three places. Renaming it in the twin's copy alone is
-# the smallest edit that makes the two towns different places rather than two
-# instances of one -- and "Twinbaiya" is the same length, so nothing shifts.
-DEFAULT_RENAMES = [("Monsbaiya", "Twinbaiya")]
+# What the twin says by default. The town names itself in three places, and
+# "Twinbaiya" is the same length, so renaming it costs nothing. The rest are
+# whole lines, chosen so the twin acknowledges what it is; use --lines to see
+# every line with its budget, since a replacement can shorten but never grow.
+DEFAULT_RENAMES = [
+    ("Monsbaiya", "Twinbaiya"),
+    ("They say children's songs are", "They say this town is a copy"),
+    ("messages from God, I wonder", "of somewhere else. I wonder"),
+    ("This place is so nice and ", "This place is new and "),
+    ("peaceful.", "empty."),
+    ("Did you hear the news ?", "You look lost, friend."),
+]
 
 # Marker lines for --stamp, longest first. Each block opens with a real line of
 # dialogue, but they vary from six characters to forty, so take the longest that
@@ -782,6 +790,25 @@ def selftest(img: Image, src: int, span: int) -> None:
             )
 
 
+def show_lines(img: Image, chunk: int = 4444) -> None:
+    """List the town's dialogue, so it can be rewritten line by line.
+
+    Authoring is done with --rename, which matches on the original text and
+    pads the replacement out to the same byte count. The budget column is what
+    you have to work with: nothing here is length-prefixed, so a line can be
+    shortened but never grown.
+    """
+    secs = [struct.unpack("<I", img.read(chunk * DATA + DIRECTORY + i * 8, 4))[0]
+            for i in range(DIR_ENTRIES)]
+    for b, (lo, hi) in enumerate(zip(secs, secs[1:])):
+        blob = img.read(lo * DATA, (hi - lo) * DATA)
+        runs = list(text_runs(blob))
+        print(f"\n  block {b}, sectors {lo}-{hi - 1}, {len(runs)} lines")
+        for r, (off, length) in enumerate(runs):
+            text = blob[off:off + length].decode("shift_jis", "replace")
+            print(f"    [{r:>3}] {length // 2:>3}  {text}")
+
+
 def show_table(img: Image) -> None:
     print(f"Monsbaiya's location table -- {N_ENTRIES} entries at LBA "
           f"{entry(0) // DATA}, offset 0x{entry(0) % DATA:x}\n")
@@ -822,12 +849,17 @@ def main(argv=None) -> int:
     ap.add_argument("--stamp", action="store_true",
                     help="overwrite the opening line of every dialogue block, so "
                          "the twin is obvious whoever you talk to")
+    ap.add_argument("--lines", action="store_true",
+                    help="print the town's dialogue with its length budget and exit")
     ap.add_argument("--list", action="store_true", help="print the location table and exit")
     args = ap.parse_args(argv)
 
     img = Image(open(args.image, "rb").read())
     if args.list:
         show_table(img)
+        return 0
+    if args.lines:
+        show_lines(img)
         return 0
 
     t = TEMPLATES[args.template]
