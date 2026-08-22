@@ -663,10 +663,30 @@ mechanism is the model we want. The record naming the tower entrance
 12809 +0x46c, and is absent from RAM while standing in town — so it belongs to
 the tower's own data and is not what the town consults.
 
-The open question is therefore what triggers the town-to-tower transition, and
-where the map's walkable triggers live. Finding that is the prerequisite for a
-south gate, and the enqueue logger's caller column is the tool for it: walk into
-the tower with the tracer running and look at which code requested 13660.
+**The tower is a module switch, not a warp.** Tracing a walk into it gives:
+
+    11305    4  0x80126804   TOWN.BIN     the last thing town loads
+    12628    8  0x80126804   DUNGEON.BIN  the dungeon's companion chunk
+    12636  187  0x80088760   DUNGEON.BIN  the dungeon module itself
+    13660   19  0x80016000   DUNGEON.BIN  and then its first floor
+
+That 187-sector blob covers `0x80088760`-`0x800e5f60`, and both the code that
+announced the new location id (`0x800d4404`) and the record naming the floor
+(`{19 sectors -> 0x80016000, 13660}` at `0x800df3cc`) are inside it. The town
+never knew the tower's sector: it handed control to the dungeon module, which
+loaded its own floor. So the tower is not a template for walking between towns,
+and the record found on disc at LBA 12809 is simply the module's own copy.
+
+Note the last two reads have the same shape as a town arrival -- a companion
+chunk to `0x80126804`, then 19 sectors to `0x80016000` -- which is more evidence
+that the exit path is the right one for a second town. What is missing is only
+the trigger. That means cracking the town map's walkable entity format, since
+the south gate does nothing in vanilla and so has no trigger to repoint.
+
+Until then `--gate-id` moves the link to any building's exit. Learning a
+building's id means walking in and out with the tracer and reading the location
+log; the ones observed so far are 1 (the house), 20 (the monster shop) and
+21 (Barry's shop).
 
 ## Unused disc space
 
