@@ -683,10 +683,33 @@ that the exit path is the right one for a second town. What is missing is only
 the trigger. That means cracking the town map's walkable entity format, since
 the south gate does nothing in vanilla and so has no trigger to repoint.
 
-Until then `--gate-id` moves the link to any building's exit. Learning a
-building's id means walking in and out with the tracer and reading the location
-log; the ones observed so far are 1 (the house), 20 (the monster shop) and
-21 (Barry's shop).
+Until then `--gate-id` moves the link to any building's exit.
+
+## Location ids are building types, and the town has a plot table
+
+cjaz's `BuildingType` enum and our location ids are the same numbering. The
+three ids we watched doors announce line up exactly: 1 is `KohHouse_1`, and
+0x14 and 0x15 are the monster shop and Barry's, which his enum skips only
+because the shops are always present so nothing ever needs to ask whether they
+were built.
+
+The town keeps a plot table at `0x800133a4`: 34 entries of two bytes,
+`{type, upgradingType}`. It says what stands on each lot. Reading it out of a
+save mid-game gives, for that save, `Koh's House 2` on plot 11, `Fountain` on
+plot 16 and `Monster Hut 2` on plot 33, with the rest holding fixed structures.
+Named plot indices, from cjaz: racetrack 1, temple 2, Koh's house 0xb,
+fountain 0x10, hospital 0x11, library 0x12, monster hut 0x21.
+
+Types `0x2c`-`0x33` are vacant lots, one per buildable plot -- they sit in the
+racetrack and library slots of a save where neither is built. Building passes
+through a stage-1 type first: `0x04` before `Fountain`, `0x0f` before
+`Hospital`, `0x11` before `Temple`. The table survives the switch into the
+tower, so it is persistent state rather than part of the town overlay.
+
+Two things follow. Location ids can now be named rather than discovered by
+walking, which is what `--gate-id` reports against. And whatever code reads
+`0x800133a4` to decide what to place is the town's entity layer -- the best
+remaining lead on where a walkable trigger like the south gate would live.
 
 ## Unused disc space
 

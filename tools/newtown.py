@@ -199,11 +199,25 @@ GATE_ORIGINAL = (0x3C028008, 0x244212F8)     # lui $v0,0x8008 ; addiu $v0,$v0,0x
 
 AT, V0, V1, SP = 1, 2, 3, 29
 
-# Location ids we have watched a door announce. Any building will do as the
-# travel link -- the id is only a discriminator -- but you have to learn its id
-# by walking in and out with tools/trace_cd.py running, since nothing on the
-# disc lists them.
-EXITS = {1: "the house", 20: "the monster shop", 21: "Barry's shop"}
+# A location id is a *building type*. The town keeps a plot table at 0x800133a4
+# -- 34 plots, two bytes each, {type, upgradingType} -- saying what stands on
+# each lot, and the id a door announces is the type of the building it belongs
+# to. Names below are cjaz's BuildingType enum, plus the two shops we watched
+# announce their own ids (his enum skips them: they are always present, so
+# nothing ever needed to ask whether they were built).
+#
+# Types 0x2c-0x33 are vacant lots, one per buildable plot; a lot becomes its
+# building's type when built, having passed through a stage-1 type on the way
+# (0x04 fountain, 0x0f hospital, 0x11 temple).
+EXITS = {
+    1: "Koh's house", 2: "Koh's house, upgraded once",
+    3: "Koh's house, upgraded twice", 5: "the fountain", 6: "the casino",
+    7: "the library", 8: "the gym", 9: "the arcade", 10: "the racetrack",
+    11: "the theater", 12: "the alley", 16: "the hospital", 18: "the temple",
+    20: "the monster shop", 21: "Barry's shop",
+    37: "monster hut 1", 38: "monster hut 2", 39: "monster hut 3",
+    40: "monster hut 4", 41: "monster hut 5",
+}
 
 
 def exit_name(gate: int) -> str:
