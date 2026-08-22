@@ -1,0 +1,550 @@
+/* Azure Dreams Shop Patcher
+ *
+ * Palette is pulled from the subject: the deep navy of a disc read in the dark,
+ * the cyan of the laser, and the sand of Monsbaiya. Chakra Petch gives the
+ * squared, mid-90s console-hardware voice; IBM Plex carries the reading and the
+ * data. The sector map is the one loud element -- everything else stays quiet.
+ */
+
+:root {
+  --ink:        #0a0f1c;
+  --ink-panel:  #111a2e;
+  --ink-raised: #16223c;
+  --line:       #1f2c49;
+  --line-soft:  #17223a;
+
+  --azure:      #4cc9f0;
+  --azure-deep: #1d6f92;
+  --sand:       #e0a458;
+  --jade:       #64d6a4;
+  --rose:       #f2696b;
+
+  --text:       #e6edf7;
+  --muted:      #8494b0;
+
+  --display: 'Chakra Petch', 'Eurostile', 'Bahnschrift', sans-serif;
+  --body:    'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  --mono:    'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
+
+  --gutter: clamp(1.25rem, 4vw, 3.5rem);
+  --radius: 3px;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+/* Several blocks below set display, which would otherwise beat the UA rule
+   for [hidden] and leave "hidden" elements on screen. */
+[hidden] { display: none !important; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(1100px 620px at 50% -240px, #16305199 0%, transparent 70%),
+    var(--ink);
+  color: var(--text);
+  font-family: var(--body);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+.shell {
+  max-width: 61rem;
+  margin: 0 auto;
+  padding: clamp(2.5rem, 7vw, 5.5rem) var(--gutter) 4rem;
+}
+
+/* ---------------------------------------------------------------- masthead */
+
+.eyebrow {
+  margin: 0 0 1.4rem;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.19em;
+  text-transform: uppercase;
+  color: var(--azure-deep);
+}
+
+.masthead h1 { margin: 0; display: flex; flex-direction: column; }
+
+.title-sub {
+  font-family: var(--display);
+  font-weight: 500;
+  font-size: clamp(1rem, 2.4vw, 1.3rem);
+  letter-spacing: 0.42em;
+  text-transform: uppercase;
+  color: var(--azure);
+  padding-left: 0.2em;
+}
+
+.title-main {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: clamp(2.7rem, 9.5vw, 5.4rem);
+  line-height: 0.94;
+  letter-spacing: -0.022em;
+  margin-top: 0.14em;
+}
+
+.lede {
+  max-width: 44ch;
+  margin: 1.6rem 0 0;
+  font-size: clamp(1rem, 1.6vw, 1.12rem);
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------- the sector map */
+
+.discmap { margin: clamp(2.8rem, 6vw, 4.2rem) 0 clamp(2.4rem, 5vw, 3.4rem); }
+
+.discmap-band {
+  position: relative;
+  height: 46px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, #0d1526 0%, #0a1120 100%);
+  overflow: hidden;
+}
+
+/* fine striations standing in for the sector run across the disc */
+.discmap-track {
+  position: absolute;
+  inset: 0;
+  background-image: repeating-linear-gradient(
+    90deg,
+    #ffffff08 0 1px,
+    transparent 1px 5px
+  );
+  mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent);
+}
+
+.discmap-ticks { position: absolute; inset: 0; }
+
+/* Scale ends, so the cluster near the start of the disc reads as a fact about
+   where the shop code lives rather than as an empty graphic. */
+.discmap-band::after {
+  content: 'sector 0';
+  position: absolute;
+  left: 9px;
+  bottom: 5px;
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.06em;
+  color: #3d4a66;
+  pointer-events: none;
+}
+
+.discmap-end {
+  position: absolute;
+  right: 9px;
+  bottom: 5px;
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.06em;
+  color: #3d4a66;
+  pointer-events: none;
+}
+
+.tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--azure-deep);
+  opacity: 0.5;
+  transition: background 240ms ease, opacity 240ms ease, box-shadow 240ms ease;
+}
+
+.tick.lit {
+  background: var(--azure);
+  opacity: 1;
+  box-shadow: 0 0 16px 1px #4cc9f099;
+}
+
+.tick.off { opacity: 0.14; }
+
+/* a single sweep across the band while the patch runs */
+.discmap-band.working::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, #4cc9f036, transparent);
+  width: 34%;
+  animation: sweep 1s ease-in-out;
+}
+
+@keyframes sweep {
+  from { transform: translateX(-40%); }
+  to   { transform: translateX(330%); }
+}
+
+.discmap-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  margin-top: 0.9rem;
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+
+.discmap-legend strong { color: var(--text); font-weight: 500; }
+.legend-sep { width: 1px; height: 11px; background: var(--line); }
+.legend-note { color: var(--azure-deep); }
+
+/* What each rewritten sector holds. Dims when its patch is switched off, so
+   the map always reflects the options actually selected. */
+/* Exactly six sectors, so the columns are declared rather than auto-fitted --
+   auto-fit leaves a lone orphan cell on a second row at most widths. */
+.manifest {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 1px;
+  margin: 1px 0 0;
+  padding: 0;
+  background: var(--line-soft);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.manifest li {
+  background: #0b1322;
+  padding: 0.6rem 0.75rem 0.65rem;
+  transition: background 200ms ease, opacity 200ms ease;
+}
+
+.manifest .m-lba {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--azure-deep);
+  transition: color 200ms ease;
+}
+
+.manifest .m-role {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.45;
+  margin-top: 0.1rem;
+}
+
+.manifest li.lit { background: #0f1d31; }
+.manifest li.lit .m-lba { color: var(--azure); }
+.manifest li.off { opacity: 0.3; }
+
+/* -------------------------------------------------------------- the steps */
+
+.step {
+  display: grid;
+  grid-template-columns: 4.2rem 1fr;
+  gap: 0 1rem;
+  padding: clamp(1.9rem, 4vw, 2.6rem) 0;
+  border-top: 1px solid var(--line-soft);
+}
+
+.step-index {
+  margin: 0.15rem 0 0;
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: 0.08em;
+  color: var(--azure-deep);
+}
+
+.step-body { min-width: 0; }
+
+.step-body h2 {
+  margin: 0 0 0.5rem;
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: clamp(1.24rem, 2.6vw, 1.55rem);
+  letter-spacing: -0.008em;
+}
+
+.step-hint {
+  margin: 0 0 1.4rem;
+  max-width: 58ch;
+  color: var(--muted);
+  font-size: 0.94rem;
+}
+
+.step-hint code,
+.dl-note code {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  color: var(--azure);
+}
+
+/* ------------------------------------------------------------- drop zone */
+
+.drop {
+  display: flex;
+  align-items: center;
+  gap: 1.1rem;
+  padding: 1.5rem 1.6rem;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  background: var(--ink-panel);
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
+}
+
+.drop:hover,
+.drop.hot {
+  border-color: var(--azure);
+  background: var(--ink-raised);
+}
+
+.drop:focus-within {
+  outline: 2px solid var(--azure);
+  outline-offset: 2px;
+}
+
+.drop input[type="file"] {
+  position: absolute; width: 1px; height: 1px;
+  opacity: 0; pointer-events: none;
+}
+
+.drop-icon { color: var(--azure-deep); flex: none; line-height: 0; }
+.drop.hot .drop-icon { color: var(--azure); }
+
+.drop-text { display: flex; flex-direction: column; }
+.drop-text strong { font-weight: 600; font-size: 1rem; }
+.drop-text em { font-style: normal; color: var(--muted); font-size: 0.88rem; }
+
+.fileinfo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 1rem;
+  margin-top: 0.9rem;
+  padding: 0.7rem 0.9rem;
+  border-left: 2px solid var(--jade);
+  background: #0e1727;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
+
+.fileinfo-name { color: var(--text); word-break: break-all; }
+.fileinfo-meta { color: var(--muted); }
+
+/* --------------------------------------------------------------- options */
+
+.opt {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0 0.95rem;
+  padding: 1.15rem 1.25rem;
+  margin-bottom: 0.75rem;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: var(--ink-panel);
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease;
+}
+
+.opt:hover { border-color: var(--line); background: var(--ink-raised); }
+.opt:focus-within { outline: 2px solid var(--azure); outline-offset: 2px; }
+
+.opt input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+
+.opt-box {
+  width: 17px; height: 17px;
+  margin-top: 0.28rem;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: #0b1220;
+  position: relative;
+  transition: border-color 160ms ease, background 160ms ease;
+}
+
+.opt-box::after {
+  content: '';
+  position: absolute;
+  left: 5px; top: 1px;
+  width: 4px; height: 9px;
+  border: solid #071018;
+  border-width: 0 2px 2px 0;
+  transform: rotate(42deg) scale(0.5);
+  opacity: 0;
+  transition: opacity 130ms ease, transform 130ms ease;
+}
+
+.opt input:checked + .opt-box { background: var(--azure); border-color: var(--azure); }
+.opt input:checked + .opt-box::after { opacity: 1; transform: rotate(42deg) scale(1); }
+
+.opt-title { display: block; font-weight: 600; margin-bottom: 0.2rem; }
+
+.opt-desc {
+  display: block;
+  color: var(--muted);
+  font-size: 0.9rem;
+  max-width: 56ch;
+}
+
+.opt-tags { display: flex; flex-wrap: wrap; gap: 0.32rem; margin-top: 0.7rem; }
+
+.tag {
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.03em;
+  color: var(--sand);
+  border: 1px solid #e0a4582e;
+  background: #e0a4580f;
+  padding: 0.1rem 0.42rem;
+  border-radius: 2px;
+}
+
+/* ------------------------------------------------------- action + output */
+
+.cta {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 0.95rem;
+  letter-spacing: 0.05em;
+  color: #06121b;
+  background: var(--azure);
+  border: 0;
+  border-radius: var(--radius);
+  padding: 0.78rem 1.7rem;
+  cursor: pointer;
+  transition: background 160ms ease, transform 100ms ease;
+}
+
+.cta:hover:not(:disabled) { background: #6fd7f5; }
+.cta:active:not(:disabled) { transform: translateY(1px); }
+.cta:focus-visible { outline: 2px solid var(--azure); outline-offset: 3px; }
+
+.cta:disabled {
+  background: var(--ink-raised);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.status {
+  margin: 1rem 0 0;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--muted);
+  min-height: 1.2em;
+}
+
+.status.err { color: var(--rose); }
+.status.ok  { color: var(--jade); }
+
+.log {
+  margin: 0.9rem 0 0;
+  padding: 0.95rem 1.1rem;
+  border: 1px solid var(--line-soft);
+  border-left: 2px solid var(--azure-deep);
+  border-radius: var(--radius);
+  background: #0b1322;
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  line-height: 1.85;
+  color: var(--muted);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.downloads {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 1.3rem;
+}
+
+.dl {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 0.88rem;
+  letter-spacing: 0.03em;
+  text-decoration: none;
+  color: var(--azure);
+  border: 1px solid var(--azure-deep);
+  border-radius: var(--radius);
+  padding: 0.6rem 1.15rem;
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.dl:hover { background: #4cc9f014; border-color: var(--azure); }
+.dl:focus-visible { outline: 2px solid var(--azure); outline-offset: 3px; }
+
+.dl-primary {
+  background: var(--jade);
+  border-color: var(--jade);
+  color: #06180f;
+}
+
+.dl-primary:hover { background: #7fe3b8; border-color: #7fe3b8; color: #06180f; }
+
+.dl-note {
+  flex-basis: 100%;
+  margin: 0.3rem 0 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------- colophon */
+
+.colophon {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1.8rem;
+  margin-top: 1.5rem;
+  padding-top: 2.2rem;
+  border-top: 1px solid var(--line-soft);
+}
+
+.colophon-col h3 {
+  margin: 0 0 0.45rem;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--azure-deep);
+}
+
+.colophon-col p {
+  margin: 0;
+  font-size: 0.87rem;
+  color: var(--muted);
+}
+
+/* ---------------------------------------------------------------- narrow */
+
+@media (max-width: 60rem) {
+  .manifest { grid-template-columns: repeat(3, 1fr); }
+}
+
+@media (max-width: 34rem) {
+  .step { grid-template-columns: 1fr; gap: 0; }
+  .step-index { margin-bottom: 0.5rem; }
+  .discmap-band { height: 38px; }
+  .discmap-band::after, .discmap-end { display: none; }
+  .manifest { grid-template-columns: repeat(2, 1fr); }
+  .drop { flex-direction: column; align-items: flex-start; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

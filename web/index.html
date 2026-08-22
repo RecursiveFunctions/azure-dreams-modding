@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Azure Dreams Shop Patcher</title>
+<meta name="description" content="Add stock to Barry's shop and turn the monster shop into a working store. Runs entirely in your browser.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="shell">
+
+  <header class="masthead">
+    <p class="eyebrow">SLUS-00614 &middot; MODE2/2352 &middot; runs in your browser</p>
+    <h1>
+      <span class="title-sub">Azure Dreams</span>
+      <span class="title-main">Shop&nbsp;Patcher</span>
+    </h1>
+    <p class="lede">
+      Barry sells two things. The monster shop apologises instead of selling
+      anything at all. This rewrites six sectors of your disc image and fixes
+      both.
+    </p>
+  </header>
+
+  <!-- Signature element: the whole disc, and the handful of sectors we touch.
+       The band shows where they sit (all of them early, and close together --
+       the shop code is neighbours on the disc). The manifest names them,
+       because at this scale the ticks would otherwise overlap into a smear. -->
+  <section class="discmap" aria-labelledby="discmap-h">
+    <h2 id="discmap-h" class="sr-only">Sectors this patch rewrites</h2>
+    <div class="discmap-band" id="band">
+      <div class="discmap-track" aria-hidden="true"></div>
+      <div class="discmap-ticks" id="ticks"></div>
+      <span class="discmap-end" id="bandEnd" aria-hidden="true">126,946</span>
+    </div>
+    <div class="discmap-legend">
+      <span class="legend-count"><strong id="touchedCount">6</strong> of
+        <strong id="totalSectors">126,946</strong> sectors rewritten</span>
+      <span class="legend-sep" aria-hidden="true"></span>
+      <span class="legend-note" id="bandNote">everything else stays byte-for-byte original</span>
+    </div>
+    <ul class="manifest" id="manifest"></ul>
+  </section>
+
+  <main>
+
+    <section class="step" aria-labelledby="s1">
+      <p class="step-index">01</p>
+      <div class="step-body">
+        <h2 id="s1">Choose your disc image</h2>
+        <p class="step-hint">
+          An unmodified <em>Azure Dreams (USA)</em> <code>.bin</code>. It has to be
+          the 2352-bytes-per-sector kind &mdash; that is what almost every PlayStation
+          rip is. Your file is never uploaded; the patching happens on this page.
+        </p>
+
+        <label class="drop" id="drop" for="file">
+          <input type="file" id="file" accept=".bin,application/octet-stream">
+          <span class="drop-icon" aria-hidden="true">
+            <svg viewBox="0 0 48 48" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.25">
+              <circle cx="24" cy="24" r="19"/><circle cx="24" cy="24" r="6.5"/>
+              <path d="M24 5a19 19 0 0 1 19 19" stroke-width="2.5"/>
+            </svg>
+          </span>
+          <span class="drop-text">
+            <strong>Drop the .bin here</strong>
+            <em>or click to browse</em>
+          </span>
+        </label>
+
+        <div class="fileinfo" id="fileinfo" hidden>
+          <span class="fileinfo-name" id="fileName"></span>
+          <span class="fileinfo-meta" id="fileMeta"></span>
+        </div>
+      </div>
+    </section>
+
+    <section class="step" aria-labelledby="s2">
+      <p class="step-index">02</p>
+      <div class="step-body">
+        <h2 id="s2">Choose what changes</h2>
+
+        <label class="opt">
+          <input type="checkbox" id="optBarry" checked>
+          <span class="opt-box" aria-hidden="true"></span>
+          <span class="opt-body">
+            <span class="opt-title">Barry&rsquo;s shop stocks nine items</span>
+            <span class="opt-desc">
+              Keeps the Copper Sword and Medicinal Herb, adds seven monster eggs.
+              Egg prices are set to their sell value so you can&rsquo;t buy and
+              reflip them for profit.
+            </span>
+            <span class="opt-tags">
+              <span class="tag">KEWNE 100G</span><span class="tag">TROLL 800G</span>
+              <span class="tag">CLOWN 1000G</span><span class="tag">NYUEL 1800G</span>
+              <span class="tag">GRIFFON 2000G</span><span class="tag">ARACHNE 2400G</span>
+              <span class="tag">DRAGON 10000G</span>
+            </span>
+          </span>
+        </label>
+
+        <label class="opt">
+          <input type="checkbox" id="optMonster" checked>
+          <span class="opt-box" aria-hidden="true"></span>
+          <span class="opt-body">
+            <span class="opt-title">The monster shop actually sells monsters</span>
+            <span class="opt-desc">
+              &ldquo;I&rsquo;ve come to buy.&rdquo; opens a table of 24 eggs instead of an
+              apology. Quotes a price, asks you to confirm, takes your gold and
+              puts the egg in your bag.
+            </span>
+            <span class="opt-tags">
+              <span class="tag">price quote</span><span class="tag">confirm prompt</span>
+              <span class="tag">pays gold</span><span class="tag">receives egg</span>
+            </span>
+          </span>
+        </label>
+      </div>
+    </section>
+
+    <section class="step" aria-labelledby="s3">
+      <p class="step-index">03</p>
+      <div class="step-body">
+        <h2 id="s3">Patch it</h2>
+        <button id="go" class="cta" disabled>Patch the image</button>
+
+        <p class="status" id="status" role="status" aria-live="polite"></p>
+        <pre class="log" id="log" hidden></pre>
+
+        <div class="downloads" id="downloads" hidden>
+          <a class="dl dl-primary" id="dlBin" download>Download patched .bin</a>
+          <a class="dl" id="dlCue" download>Download .cue</a>
+          <p class="dl-note">
+            Keep both files side by side and open the <code>.cue</code> in your
+            emulator.
+          </p>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="colophon">
+    <div class="colophon-col">
+      <h3>What it actually edits</h3>
+      <p>
+        Barry&rsquo;s stock is built by a hardcoded routine that spells out each
+        item byte by byte. Rewriting it as one immediate plus one store per entry
+        fits nine items in the same instruction budget.
+      </p>
+    </div>
+    <div class="colophon-col">
+      <h3>Why the monster shop was easy</h3>
+      <p>
+        Its overlay already carried a complete buy-side library &mdash; price
+        lookup, gold deduction, inventory handoff &mdash; sitting unreferenced
+        next to the sell code it mirrors. The patch wires it up rather than
+        writing it.
+      </p>
+    </div>
+    <div class="colophon-col">
+      <h3>Nothing leaves this page</h3>
+      <p>
+        There is no server. The file is read, modified and handed back by
+        JavaScript running on your own machine, and every rewritten sector gets
+        fresh EDC/ECC so the image stays valid.
+      </p>
+    </div>
+  </footer>
+
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

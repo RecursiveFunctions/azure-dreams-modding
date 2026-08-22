@@ -1,0 +1,11 @@
+# Game data is never committed here.
+*.bin
+*.cue
+*.img
+*.iso
+*.sav
+*.bak
+
+__pycache__/
+*.pyc
+node_modules/
