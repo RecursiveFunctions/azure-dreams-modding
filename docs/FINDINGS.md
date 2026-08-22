@@ -711,6 +711,45 @@ walking, which is what `--gate-id` reports against. And whatever code reads
 `0x800133a4` to decide what to place is the town's entity layer -- the best
 remaining lead on where a walkable trigger like the south gate would live.
 
+## The building placement table
+
+Scanning RAM for loads whose offset falls inside the plot table finds the
+consumer at `0x800b8460`-`0x800b85cc`, in the town module. It loops a counter
+to 33, indexes the plot table by `counter * 2`, and compares both `0x33a4`
+(type) and `0x33a5` (upgrading) against a type it was handed -- asking "is this
+building present anywhere in town", which is the same question cjaz's
+`tryToUpdateDynamicBuildingState` asks. Its neighbours read `0x33e6`/`0x33e7`,
+the last plot's two bytes, which is how the table's extent was confirmed.
+
+That code works from two tables:
+
+    0x800d2644   67 records of 32 bytes   what a building is, and where
+    0x800d2ea4   records of 8 bytes       indexed alongside, fields at +2/+3
+
+In the 32-byte record, `+6` is the building type -- the same numbering as a
+location id -- and `+7` is a related type, which for the monster huts chains
+upward through 38, 39, 40, 41 and looks like an upgrade target. `+12` and `+14`
+are coordinates. They land on a clean grid:
+
+    x   512 640 1536 2304 2432 2560 3200 3584 4096 4224 4608 4992 5632 5888 6656 6784
+    y   1536 1792 2816 3968 4096 4736 5504
+
+Seven rows, sixteen columns, everything a multiple of 128 -- a town laid out on
+a grid, which is what you would expect of a place whose buildings come and go.
+
+**Neither table is verbatim on the disc.** The same wall we hit with the
+location record table: `MAIN.BIN` and `TOWN.BIN` are read with command `0x60`,
+compressed, so these are built at runtime. Editing placement therefore means a
+runtime hook in the free executable region rather than a disc edit -- the
+mechanism we already use for the gate and remap stubs.
+
+This is the shape of the original south gate idea. "A door at the south gate"
+becomes "a building placed at the south gate", since a building carries a door
+and a door announces a location id, which is exactly what the travel gate
+discriminates on. What is missing is the gate's coordinates, and the way to get
+them is two RAM dumps from two known standing positions, diffed for the words
+that move.
+
 ## Unused disc space
 
 The disc is nominally full: only 251 of 126,946 sectors are blank. But the
