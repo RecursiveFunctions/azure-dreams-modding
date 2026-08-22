@@ -199,7 +199,15 @@ GATE_ORIGINAL = (0x3C028008, 0x244212F8)     # lui $v0,0x8008 ; addiu $v0,$v0,0x
 
 AT, V0, V1, SP = 1, 2, 3, 29
 
+# Location ids we have watched a door announce. Any building will do as the
+# travel link -- the id is only a discriminator -- but you have to learn its id
+# by walking in and out with tools/trace_cd.py running, since nothing on the
+# disc lists them.
 EXITS = {1: "the house", 20: "the monster shop", 21: "Barry's shop"}
+
+
+def exit_name(gate: int) -> str:
+    return EXITS.get(gate, f"the building announcing location id {gate}")
 
 
 def _sb(rt, base, off):
@@ -828,6 +836,9 @@ def main(argv=None) -> int:
     ap.add_argument("--template", choices=sorted(TEMPLATES), default="house",
                     help="which location to clone (default: house)")
     ap.add_argument("--at", type=int, default=DST_LBA, help="sector to place the clone at")
+    ap.add_argument("--gate-id", type=int, metavar="N",
+                    help="location id of the building whose exit leads to the "
+                         "twin (default: Barry's shop, 21)")
     ap.add_argument("--own-shop", action="store_true",
                     help="also clone Barry's shop, point the twin town's door at "
                          "the copy, and give it its own stock")
@@ -862,7 +873,12 @@ def main(argv=None) -> int:
         show_lines(img)
         return 0
 
-    t = TEMPLATES[args.template]
+    t = dict(TEMPLATES[args.template])
+    if args.gate_id is not None:
+        if not t.get("gate"):
+            raise SystemExit(f"--gate-id needs a template that uses the exit "
+                             f"fallback; try --template twotowns")
+        t["gate"] = args.gate_id
     src, span = t["lba"], t["span"]
     dst = args.at
     redirects = targets(t)
@@ -875,7 +891,7 @@ def main(argv=None) -> int:
     if t.get("warp"):
         print("door       the house's entrance, via its own destination record")
     if t.get("gate"):
-        print(f"door       leaving {EXITS[t['gate']]}, via the exit fallback")
+        print(f"door       leaving {exit_name(t['gate'])}, via the exit fallback")
     print()
 
     selftest(img, src, span)
@@ -974,7 +990,7 @@ def main(argv=None) -> int:
         print("before, but every byte of it now comes from the clone.")
         return 0
 
-    via = (f"leaving {EXITS[t['gate']]}" if t.get("gate") else
+    via = (f"the door out of {exit_name(t['gate'])}" if t.get("gate") else
            redirects[0][1] if redirects else "the house's entrance")
     print(f"\nGo through {via}. "
           f"You should arrive in a second Monsbaiya, read from sector {dst}.")
