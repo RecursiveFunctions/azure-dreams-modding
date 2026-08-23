@@ -215,6 +215,7 @@ EXITS = {
     7: "the library", 8: "the gym", 9: "the arcade", 10: "the racetrack",
     11: "the theater", 12: "the alley", 16: "the hospital", 18: "the temple",
     20: "the monster shop", 21: "Barry's shop",
+    28: "the southwesternmost house",
     37: "monster hut 1", 38: "monster hut 2", 39: "monster hut 3",
     40: "monster hut 4", 41: "monster hut 5",
 }
@@ -222,6 +223,14 @@ EXITS = {
 
 def exit_name(gate: int) -> str:
     return EXITS.get(gate, f"the building announcing location id {gate}")
+
+
+def _lhu(rt, base, off):
+    return (0x25 << 26) | (base << 21) | (rt << 16) | (off & 0xffff)
+
+
+def _sh(rt, base, off):
+    return (0x29 << 26) | (base << 21) | (rt << 16) | (off & 0xffff)
 
 
 def _sb(rt, base, off):
@@ -334,8 +343,17 @@ def apply_gate(img: Image, dst: int, packed: int, gate: int, log) -> None:
 TWIN_FLAG = 0x80079808           # one byte, between the record and the gate stub
 WITNESS = 0x8007980C             # the last sector actually substituted
 REMAP_STUB = 0x80079860          # past the gate stub's sixteen instructions
-REMAP_TABLE = 0x800798D0         # {from, to} pairs, terminated by a zero
-REMAP_LIMIT = 0x80079958
+MOVE_STUB = 0x800798D0           # the placement rewrite, ahead of the remap
+REMAP_TABLE = 0x80079910         # {from, to} pairs, terminated by a zero
+REMAP_LIMIT = 0x80079954
+
+# Record 28 of the building placement table -- the southwesternmost house, the
+# one that announces location id 28 -- with its coordinates and the south gate,
+# where we want it. See docs/FINDINGS.md.
+MOVE_RECORD = 0x800D29D0
+MOVE_HOME = (640, 5504)
+SOUTH_GATE = (3476, 6761)
+MOVE_ID = 28
 
 READ_HOOK = 0x8003EAA4
 READ_RESUME = 0x8003EAB0
@@ -384,6 +402,57 @@ def build_remap(stolen: tuple[int, int]) -> list[int]:
         _j(READ_RESUME),
         0,
     ]
+
+
+def build_move(x: int, y: int) -> list[int]:
+    """Drag one building to new coordinates, whenever we find it at its old ones.
+
+    The placement table is built at runtime from compressed data, so there is
+    nothing on the disc to edit; this runs on the disc-read path instead, which
+    fires often enough to catch the table shortly after it is built.
+
+    The guard is the point of the exercise. In town this address holds the
+    table, but the dungeon module loads across the same memory, so the stamp
+    only fires when the record still reads exactly its vanilla coordinates.
+    Once moved it stops matching, so this writes once per visit and never
+    touches the tower's data.
+
+    $at, $v0 and $v1 are dead at the hook, the same three the remap stub uses.
+    """
+    hi, lo = _split(MOVE_RECORD)
+    hx, hy = MOVE_HOME
+    skip = 13
+    return [
+        lui(AT, hi),
+        _lhu(V0, AT, lo),
+        addiu(V1, ZERO, hx),         # covers the load delay on $v0
+        _bne(V0, V1, skip - 4),      # somewhere else, or not the table at all
+        0,
+        _lhu(V0, AT, lo + 2),
+        addiu(V1, ZERO, hy),         # covers the load delay on $v0
+        _bne(V0, V1, skip - 8),
+        0,
+        addiu(V0, ZERO, x),
+        _sh(V0, AT, lo),
+        addiu(V0, ZERO, y),
+        _sh(V0, AT, lo + 2),
+        _j(REMAP_STUB),              # skip: on into the remap, then the read
+        0,
+    ]
+
+
+def apply_move(img: Image, x: int, y: int, log) -> None:
+    code = build_move(x, y)
+    stub = slus(MOVE_STUB)
+    payload = b"".join(struct.pack("<I", c) for c in code)
+    if img.read(stub, len(payload)) not in (bytes(len(payload)), payload):
+        raise SystemExit(f"scratch at 0x{MOVE_STUB:08x} is not free")
+    img.write(stub, payload)
+    img.write(slus(READ_HOOK), struct.pack("<I", _j(MOVE_STUB)))
+
+    log(f"  move stub     0x{MOVE_STUB:08x}  LBA {stub // DATA} +0x{stub % DATA:03x}  "
+        f"{len(code)} instructions")
+    log(f"  moved         the house at {MOVE_HOME} to {(x, y)}, the south gate")
 
 
 def apply_remap(img: Image, entries, log) -> None:
@@ -850,6 +919,9 @@ def main(argv=None) -> int:
     ap.add_argument("--template", choices=sorted(TEMPLATES), default="house",
                     help="which location to clone (default: house)")
     ap.add_argument("--at", type=int, default=DST_LBA, help="sector to place the clone at")
+    ap.add_argument("--move-house", action="store_true",
+                    help="drag the southwesternmost house to the south gate and "
+                         "make its door the way to the twin")
     ap.add_argument("--gate-id", type=int, metavar="N",
                     help="location id of the building whose exit leads to the "
                          "twin (default: Barry's shop, 21)")
@@ -888,6 +960,8 @@ def main(argv=None) -> int:
         return 0
 
     t = dict(TEMPLATES[args.template])
+    if args.move_house and args.gate_id is None:
+        args.gate_id = MOVE_ID
     if args.gate_id is not None:
         if not t.get("gate"):
             raise SystemExit(f"--gate-id needs a template that uses the exit "
@@ -965,13 +1039,15 @@ def main(argv=None) -> int:
         got, secs, region = apply_dialogue(img, dst, args.dialogue_at, print)
         exempt |= got
         regions.append(region)
-    if args.own_map or args.own_dialogue:
+    if args.own_map or args.own_dialogue or args.move_house:
         if not t.get("gate"):
             raise SystemExit("--own-map needs the gate, which is what knows "
                              "which town is loading")
         entries, region = apply_map(img, dst, args.map_at, print)
         regions.append(region)
         apply_remap(img, entries, print)
+        if args.move_house:
+            apply_move(img, *SOUTH_GATE, print)
     if secs is not None:
         renames = [tuple(r.split("=", 1)) for r in args.rename] or DEFAULT_RENAMES
         apply_text(img, secs, regions, renames, args.stamp, print)
