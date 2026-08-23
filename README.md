@@ -60,11 +60,11 @@ table rather than hardcoded, so the rule cannot drift out of step with it.
 
 `tools/newtown.py` builds a disc with **two Monsbaiyas on it**. The original is
 where it always was; the twin lives in sectors that shipped as padding inside
-`DUMMY_.STR`, and you reach it by walking out of Barry's shop.
+`DUMMY_.STR`, and you reach it through a house at the south gate.
 
 ```sh
 python3 tools/newtown.py "Azure Dreams (USA).bin" \
-    --template twotowns --own-shop --own-dialogue
+    --template twotowns --own-shop --own-dialogue --move-house
 ```
 
 The twin is not a mirror. It has its own weapon shop with its own stock, and its
@@ -75,10 +75,17 @@ own dialogue, both independent of the original town's. What makes that possible:
 - **A clone owns its chunk**, and the chunk holds the town's door table and its
   dialogue directory. Those can be edited for one town without touching the
   other.
-- **Everything else is shared**, and for that there is an asset remap hook: the
-  gate that chooses the twin sets a flag, and a stub on the disc read path
-  substitutes sectors while that flag is set. Adding an asset costs eight bytes
-  in a data table and no reassembly.
+- **Everything else is shared**, and for that there is an asset remap hook: a
+  flag records which town you are in, and a stub on the disc read path
+  substitutes sectors while it is set. Adding an asset costs eight bytes in a
+  data table and no reassembly.
+
+Travel is a building, not a special case. `--move-house` relocates one house to
+the south gate — its position lives in a table built at runtime from compressed
+data, so a stub rewrites it rather than the disc — and that house's door is the
+one door that crosses between the towns. It works in both directions, and every
+*other* building returns you to the town you entered it from, so the twin is a
+place you can walk around in rather than a single room.
 
 Some flags are for testing rather than play. `--stamp` replaces every line of
 the twin's dialogue with a marker, which is how you prove a redirect took effect
@@ -113,6 +120,7 @@ web/patcher.js      patch logic (also runs under node)
 web/app.js          interface wiring
 tools/newtown.py    clone a location, add a second town
 tools/trace_cd.py   inject disc-read logging, decode the result
+tools/ramdump.py    pull guest RAM out of a running DuckStation
 tools/compare.mjs   proves the JS and Python emit identical bytes
 docs/FINDINGS.md    the reverse engineering: addresses, opcodes, method
 ```

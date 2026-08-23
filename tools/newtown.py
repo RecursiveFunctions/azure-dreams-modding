@@ -191,6 +191,18 @@ ARRIVE = (384, 800)
 #
 # The location id has already been written by this point, back at 8003bb54 in
 # the same function, so it reflects the door being used right now.
+#
+# The first version of this stub asked the wrong question. It read "does this
+# door lead to the twin?", defaulting to the original town, which made the twin
+# exactly one room deep: the gate building took you there, and stepping out of
+# any *other* building -- the shop, the house, the temple -- announced an id the
+# stub did not recognise and dropped you back in the original town.
+#
+# The right question is "which town am I in?", and that is state rather than a
+# property of the door. So the flag becomes the answer, every ordinary exit
+# returns it unchanged, and the gate building is the one door that flips it.
+# That makes the gate two-way as a side effect: the original stub sent both
+# towns' gate buildings to the twin, so once there you could never leave.
 # ---------------------------------------------------------------------------
 GATE_STUB = 0x80079810
 GATE_HOOK = 0x8003BC58
@@ -253,6 +265,10 @@ def _bne(rs, rt, words):
     return (0x05 << 26) | (rs << 21) | (rt << 16) | (words & 0xFFFF)
 
 
+def _xori(rt, rs, imm):
+    return (0x0E << 26) | (rs << 21) | (rt << 16) | (imm & 0xFFFF)
+
+
 def _j(addr):
     return (0x02 << 26) | ((addr & 0x0FFFFFFF) >> 2)
 
@@ -263,25 +279,34 @@ def _split(addr):
 
 
 def build_gate(gate: int) -> list[int]:
+    """Leave by any door and arrive in the town you were already in.
+
+    The flag is which town that is. An ordinary exit reads it, writes it back
+    unchanged and picks the matching record; the gate building's exit flips it
+    first, which is what travel between the two towns consists of. One bit of
+    state, and the twin stops being one room deep.
+    """
     hi, lo = _split(DEST_RECORD)
     fhi, flo = _split(TWIN_FLAG)
     return [
-        lui(V0, 0x8008),
-        addiu(V0, V0, 0x12F8),       # default: the original town
         lui(AT, fhi),
-        _sb(ZERO, AT, flo),          # and by default we are not in the twin
+        _lbu(V0, AT, flo),           # the town we are in
         lui(V1, 0x800D),
         _lbu(V1, V1, 0x381A),        # the id of the door we just used
         addiu(AT, ZERO, gate),       # covers the load delay on $v1
-        _bne(V1, AT, 6),             # not our door: keep the default
+        _bne(V1, AT, 2),             # an ordinary door: stay where we are
         0,
-        lui(V0, hi),
-        addiu(V0, V0, lo),           # our clone
+        _xori(V0, V0, 1),            # the gate building: cross over
         lui(AT, fhi),
-        addiu(V1, ZERO, 1),
-        _sb(V1, AT, flo),            # remember it, for the asset remap
-        _j(GATE_RESUME),
+        _sb(V0, AT, flo),            # and this is where we now are
+        _beq(V0, ZERO, 4),
         0,
+        lui(V0, hi),                 # the twin, from our own record
+        _j(GATE_RESUME),
+        addiu(V0, V0, lo),           # delay slot
+        lui(V0, 0x8008),             # the original, from the game's own
+        _j(GATE_RESUME),
+        addiu(V0, V0, 0x12F8),       # delay slot
     ]
 
 
@@ -296,6 +321,9 @@ def apply_gate(img: Image, dst: int, packed: int, gate: int, log) -> None:
     code = build_gate(gate)
     stub = slus(GATE_STUB)
     payload = b"".join(struct.pack("<I", c) for c in code)
+    if GATE_STUB + len(payload) > REMAP_STUB:
+        raise SystemExit(f"the gate stub runs into the remap stub at "
+                         f"0x{REMAP_STUB:08x}")
     if img.read(stub, len(payload)) not in (bytes(len(payload)), payload):
         raise SystemExit(f"scratch at 0x{GATE_STUB:08x} is not free")
     img.write(stub, payload)
@@ -305,8 +333,8 @@ def apply_gate(img: Image, dst: int, packed: int, gate: int, log) -> None:
     for k, was in enumerate(GATE_ORIGINAL):
         img.patch_u32(slus(GATE_HOOK) + k * 4, was, _j(GATE_STUB) if k == 0 else 0)
     log(f"  hook          0x{GATE_HOOK:08x}  the exit fallback now asks the stub")
-    log(f"  gate          leaving {EXITS.get(gate, gate)} (location {gate}) "
-        f"arrives at sector {dst}; every other exit is unchanged")
+    log(f"  gate          leaving {EXITS.get(gate, gate)} (location {gate}) crosses "
+        f"between the towns; every other exit stays in the town you are in")
 
 
 # ---------------------------------------------------------------------------
@@ -342,7 +370,7 @@ def apply_gate(img: Image, dst: int, packed: int, gate: int, log) -> None:
 # past 0x800797f8 and the two can be applied together.
 TWIN_FLAG = 0x80079808           # one byte, between the record and the gate stub
 WITNESS = 0x8007980C             # the last sector actually substituted
-REMAP_STUB = 0x80079860          # past the gate stub's sixteen instructions
+REMAP_STUB = 0x80079858          # past the gate stub's eighteen instructions
 MOVE_STUB = 0x800798D0           # the placement rewrite, ahead of the remap
 REMAP_TABLE = 0x80079910         # {from, to} pairs, terminated by a zero
 REMAP_LIMIT = 0x80079954
@@ -362,21 +390,33 @@ MAP_SRC, MAP_COUNT, MAP_READ = 4463, 64, 16
 MAP_DST = 31286
 
 
-def build_remap(stolen: tuple[int, int]) -> list[int]:
+def build_remap(stolen: tuple[int, int], town: int) -> list[int]:
     """Consult the table if the twin is loading, then do the work we displaced.
 
     $at, $v0 and $v1 are all dead here -- the next thing to set $v0 is the
     CdIntToPos call below, and $v1 is untouched until well after. $s1 and $sp
     carry the caller's state and are left alone. Every load is separated from
     its first use, for the R3000's load delay slot.
+
+    The flag is re-derived here as well as set by the gate, because the gate is
+    not on every path into a town. Leaving for the tower and coming back is a
+    module switch rather than a warp, so it never consults the gate; with the
+    flag left set from before, the original town would load and then be handed
+    the twin's map. Watching for the original's own chunk sector go past fixes
+    that from ground truth, and it is ordered correctly for free -- a town's
+    chunk is read before the map pieces that follow it.
     """
     fhi, flo = _split(TWIN_FLAG)
     thi, tlo = _split(REMAP_TABLE)
     whi, wlo = _split(WITNESS)
-    loop, done = REMAP_STUB + 7 * 4, REMAP_STUB + 21 * 4
+    loop, done = REMAP_STUB + 11 * 4, REMAP_STUB + 25 * 4
     return [
         stolen[0],                   # lw    $a0, 4($s1)   -- the LBA
-        lui(AT, fhi),                # covers the load delay on $a0
+        addiu(V1, ZERO, town),       # covers the load delay on $a0
+        lui(AT, fhi),
+        _bne(A0, V1, 2),             # anything but the original town's chunk
+        0,
+        _sb(ZERO, AT, flo),          # that chunk means we are not in the twin
         _lbu(V0, AT, flo),
         lui(V1, thi),                # covers the load delay on $v0
         addiu(V1, V1, tlo),
@@ -445,6 +485,9 @@ def apply_move(img: Image, x: int, y: int, log) -> None:
     code = build_move(x, y)
     stub = slus(MOVE_STUB)
     payload = b"".join(struct.pack("<I", c) for c in code)
+    if MOVE_STUB + len(payload) > REMAP_TABLE:
+        raise SystemExit(f"the move stub runs into the remap table at "
+                         f"0x{REMAP_TABLE:08x}")
     if img.read(stub, len(payload)) not in (bytes(len(payload)), payload):
         raise SystemExit(f"scratch at 0x{MOVE_STUB:08x} is not free")
     img.write(stub, payload)
@@ -455,15 +498,18 @@ def apply_move(img: Image, x: int, y: int, log) -> None:
     log(f"  moved         the house at {MOVE_HOME} to {(x, y)}, the south gate")
 
 
-def apply_remap(img: Image, entries, log) -> None:
+def apply_remap(img: Image, entries, town: int, log) -> None:
     stolen = (img.read_u32(slus(READ_HOOK)), img.read_u32(slus(READ_HOOK + 4)))
     if stolen[0] != 0x8E240004 or stolen[1] >> 26 != 0x03:
         raise SystemExit(f"unexpected code at the read hook: {stolen[0]:08x} "
                          f"{stolen[1]:08x}")
 
-    code = build_remap(stolen)
+    code = build_remap(stolen, town)
     stub = slus(REMAP_STUB)
     payload = b"".join(struct.pack("<I", c) for c in code)
+    if REMAP_STUB + len(payload) > MOVE_STUB:
+        raise SystemExit(f"the remap stub runs into the move stub at "
+                         f"0x{MOVE_STUB:08x}")
     if img.read(stub, len(payload)) not in (bytes(len(payload)), payload):
         raise SystemExit(f"scratch at 0x{REMAP_STUB:08x} is not free")
     img.write(stub, payload)
@@ -923,8 +969,8 @@ def main(argv=None) -> int:
                     help="drag the southwesternmost house to the south gate and "
                          "make its door the way to the twin")
     ap.add_argument("--gate-id", type=int, metavar="N",
-                    help="location id of the building whose exit leads to the "
-                         "twin (default: Barry's shop, 21)")
+                    help="location id of the building whose exit crosses between "
+                         "the two towns (default: Barry's shop, 21)")
     ap.add_argument("--own-shop", action="store_true",
                     help="also clone Barry's shop, point the twin town's door at "
                          "the copy, and give it its own stock")
@@ -1045,7 +1091,7 @@ def main(argv=None) -> int:
                              "which town is loading")
         entries, region = apply_map(img, dst, args.map_at, print)
         regions.append(region)
-        apply_remap(img, entries, print)
+        apply_remap(img, entries, src, print)
         if args.move_house:
             apply_move(img, *SOUTH_GATE, print)
     if secs is not None:
@@ -1084,6 +1130,9 @@ def main(argv=None) -> int:
            redirects[0][1] if redirects else "the house's entrance")
     print(f"\nGo through {via}. "
           f"You should arrive in a second Monsbaiya, read from sector {dst}.")
+    if t.get("gate"):
+        print("That door works both ways, and it is the only one that does: every")
+        print("other building you enter returns you to the town you entered it from.")
     if args.own_shop:
         print("\nIts weapon shop is now a different shop from the one in the original")
         print(f"town, loaded from sector {args.shop_at}, stocking:")

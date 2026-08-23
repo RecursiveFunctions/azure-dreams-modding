@@ -25,7 +25,7 @@ Usage:
     trace_cd.py patch  <vanilla.bin> -o <traced.bin>
     trace_cd.py decode <ramdump.bin>
 
-Produce the ram dump with tools/../../ad_ramdump.py while the game is running.
+Produce the ram dump with tools/ramdump.py while the game is running.
 """
 import argparse
 import os

@@ -427,8 +427,7 @@ the monster shop  kind 11  location 20   arrive (384, 416)
 
 So the fallback becomes a choice. The two instructions that build the constant
 are replaced with a jump to a stub that returns to `8003bc60`, leaving the
-original store untouched; all the stub does is decide what sits in `$v0`. It
-defaults to `0x800812f8` and substitutes a record of ours when the id matches.
+original store untouched; all the stub does is decide what sits in `$v0`.
 `$v0` and `$v1` are both dead at that point and `$at` is the assembler's, so
 nothing needs saving.
 
@@ -436,6 +435,78 @@ Confirmed working: leaving Barry's shop loads the clone with the correct town
 sequence -- companion chunk 4205, then the chunk from 31133, then the four map
 pieces and the dialogue -- with NPCs present and conversation working, while
 leaving the house still loads the original at 4444.
+
+### The question the gate asks, and the one it should ask
+
+The first version of the stub asked *"does this door lead to the twin?"* --
+defaulting to `0x800812f8` and substituting our record when the id matched.
+That is the obvious reading of "put travel on a door", and it is wrong in a way
+that only shows up once the twin has more than one building in it.
+
+It made **the twin exactly one room deep.** The gate building took you there,
+but stepping out of any *other* building announced an id the stub did not
+recognise, so it fell through to the default and dropped you in the original
+town. The twin's shop, its house, its temple -- every one of them was a one-way
+door home. Worse, the gate was one-way in the same breath: both towns' gate
+buildings announce the same id, so both sent you to the twin, and once there
+nothing brought you back.
+
+The right question is *"which town am I in?"*, and that is **state, not a
+property of the door.** The flag at `0x80079808` already existed for the asset
+remap; making it the answer costs two instructions and fixes both faults:
+
+```mips
+lbu   $v0, flag           ; the town we are in
+lbu   $v1, 0x381a($v1)    ; the id of the door we just used
+bne   $v1, $at, +2        ; an ordinary door: stay where we are
+nop
+xori  $v0, $v0, 1         ; the gate building: cross over
+sb    $v0, flag
+beq   $v0, $zero, ...     ; and pick the record to match
+```
+
+Every ordinary exit now reads the flag, writes it back unchanged, and returns
+you to the town you were already in. The gate building is the single door that
+flips it, which makes it two-way for free -- the same door carries you across
+in both directions, because crossing is a toggle rather than a destination.
+
+Confirmed working, and both branches of the stub are covered by one circuit:
+cross to Twinbaiya, visit its weapon shop and see the nine eggs, leave the
+shop, then cross back to Monsbaiya and find Barry selling a Copper Sword again.
+
+The return leg is what proves the depth fix, which is not obvious. Leaving the
+twin's shop takes the fall-through branch with an id the stub does not match --
+the exact path that used to drop you in the original town. Had it still done
+so, the flag would have been cleared at the same moment, and the gate house
+would then have toggled it back *to* Twinbaiya. Arriving in Monsbaiya instead
+means you were standing in the twin when you used the door, so the shop exit
+must have kept you there.
+
+### The flag has to be re-derived, not just set
+
+Making the flag load-bearing exposes a second problem. The gate is not on every
+path into a town: leaving for the tower and coming back is a module switch
+rather than a warp, so it never consults the gate at all. With the flag left
+set from before, the original town would load and then be handed the twin's map
+-- the chunk from 4444 wearing 31286's scenery.
+
+The fix is to stop trusting the flag and re-derive it from ground truth. The
+remap stub already sees every sector on its way to the drive, so it watches for
+the original town's own chunk sector and clears the flag when it goes past:
+
+```mips
+lw    $a0, 4($s1)         ; the LBA
+addiu $v1, $zero, 4444    ; the original town's chunk
+bne   $a0, $v1, +2
+nop
+sb    $zero, flag         ; whatever brought us here, this is the original
+```
+
+The ordering is correct for free. A town's chunk is read *before* the map
+pieces that follow it -- read 43 then read 44 in the trace above -- so the flag
+is already right by the time the first remappable sector arrives. The twin
+needs no matching case, since 31133 is only ever reached through the gate,
+which has just set the flag itself.
 
 This also sidesteps the problem that killed the kind-12 approach. A warp into a
 town needs the right chunk, location id, arrival coordinates *and* companion
@@ -588,13 +659,22 @@ row are undefined on the R3000. The stub therefore performs the load, the
 The harder half is knowing *which* town is asking, and nothing at the read site
 can tell: the clone is byte-for-byte identical, so the chunk signature at
 `0x80016008` reads `0x8001a484` for both. But the gate stub already knows, being
-the code that chooses the clone, so it writes a flag byte at `0x80079808` — set
-on the twin's branch, cleared on every other exit — and the remap consults it.
+the code that chooses the clone, so it writes a flag byte at `0x80079808` and
+the remap consults it. The flag says which town you are *in*, not which door you
+last used — see "The question the gate asks" above — and the remap re-derives it
+from the original's chunk sector so that arrivals which bypass the gate cannot
+leave it stale.
 
-The table is data rather than unrolled code, at `0x800798d0`, so adding an asset
+The table is data rather than unrolled code, at `0x80079910`, so adding an asset
 costs eight bytes and no reassembly. `newtown.py --own-map` uses it to redirect
 the town's four 16-sector map reads at a clone; all four starting sectors need
 entries, since only the first is the one the global table names.
+
+Space is the binding constraint now, not mechanism. The three stubs and the
+table share the hole at `0x80079800`-`0x80079958` and pack it with four bytes
+of slack, leaving room for two or three more remap entries and nothing else.
+`newtown.py` asserts each stub against the start of the next as it writes, so
+growing one past its neighbour fails loudly instead of quietly overwriting it.
 
 One wrinkle for debugging: the read tracer takes its LBA from the same
 `4($s1)`, so it logs the *original* request and shows no sign of the
@@ -619,9 +699,12 @@ Confirmed by trace, one continuous session:
  77  31133    19   0x80016000   twin town        (leaving again)
 ```
 
-Read 77 is the one worth checking. The clone's exit descriptor is a byte-for-byte
-copy, so it still announces location 21, and the gate stub sends 21 to the
-clone -- you come out in the town you went in from, with no extra work.
+Read 77 is the one worth checking: you come out in the town you went in from.
+The clone's exit descriptor is a byte-for-byte copy, so it announces the same
+location 21 the original's does, and the two are told apart by the flag rather
+than by the id. That is what lets a cloned building be dropped into the twin
+without authoring a new id for it, and it is why the twin's buildings did not
+each need their own.
 
 Two constraints follow from how a door works. It must point at the same *kind*
 of place, since the id it announces selects a chunk-relative entry point; a door
@@ -791,15 +874,23 @@ Note the monster huts cannot be used this way: all five hut records hold
 x = y = 0, so they carry no position at all and must be placed by some other
 means.
 
-**The remaining obstacle is where to put the hook.** The placement table is
-built at runtime and the code that consumes it lives in the town module at
-`0x800b8460`, which is as compressed on disc as the table is. Only
-`slus_006.14` and uncompressed chunk data can be patched directly, so the
-rewrite has to be driven from a stub in the executable's free region, on a path
-that runs after the table exists. The disc-read hook already used for asset
-remapping is the obvious candidate, but it needs a tight guard: the dungeon
-module loads over `0x80088760`-`0x800e5f60`, which covers `0x800d2644`, so an
-unguarded stamp would be writing into dungeon data.
+**The hook goes on the disc-read path.** The placement table is built at
+runtime and the code that consumes it lives in the town module at `0x800b8460`,
+which is as compressed on disc as the table is. Only `slus_006.14` and
+uncompressed chunk data can be patched directly, so the rewrite has to be
+driven from a stub in the executable's free region, on a path that runs after
+the table exists. `--move-house` puts it ahead of the asset remap on the same
+read hook, and chains into it.
+
+The guard is the substance of it. The dungeon module loads over
+`0x80088760`-`0x800e5f60`, which covers `0x800d2644`, so an unguarded stamp
+would be writing into dungeon data. The stub therefore fires only while the
+record still reads exactly its vanilla (640, 5504); once moved it stops
+matching, so it writes once per visit and never touches the tower's.
+
+Confirmed working. The house stands at the south gate, its door announces
+location 28, and the gate routes 28 across to the twin -- sector 31133 loaded
+twice on leaving it. Barry's shop goes back to being a shop.
 
 ## Unused disc space
 
