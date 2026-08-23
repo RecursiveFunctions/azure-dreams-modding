@@ -746,9 +746,33 @@ mechanism we already use for the gate and remap stubs.
 This is the shape of the original south gate idea. "A door at the south gate"
 becomes "a building placed at the south gate", since a building carries a door
 and a door announces a location id, which is exactly what the travel gate
-discriminates on. What is missing is the gate's coordinates, and the way to get
-them is two RAM dumps from two known standing positions, diffed for the words
-that move.
+discriminates on.
+
+## Where the player is, and where the south gate is
+
+Diffing two RAM dumps taken at two known standing positions -- the south gate,
+then the middle of the fountain -- gives the player's coordinates as a pair of
+signed 16-bit values:
+
+    0x80083180   x, then y at +2
+    0x80082d28   a copy
+    0x800831a0   a copy
+
+The walk between the two dumps moved x by +3 and y by -3028 at all three
+addresses at once, which is exactly a walk due north and is what makes the
+identification safe rather than a coincidence of magnitudes.
+
+    the south gate      (3476, 6761)
+    beside the fountain (3479, 3733)
+
+Standing at the fountain reads 105 west and 363 north of the fountain's own
+record at (3584, 4096), so the placement table and the player share one
+coordinate system, with a record's position sitting somewhere inside the
+building's footprint rather than at the spot you stand.
+
+The gate is about 1250 south of the southernmost building row at y 5504, and
+the player can stand there, so the ground is walkable even though no building
+has ever been placed that far south.
 
 ## Unused disc space
 
