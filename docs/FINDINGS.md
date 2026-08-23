@@ -774,6 +774,33 @@ The gate is about 1250 south of the southernmost building row at y 5504, and
 the player can stand there, so the ground is walkable even though no building
 has ever been placed that far south.
 
+## Tying a placement record to a location id
+
+The generic records carry no type, so nothing on its own says which building a
+record describes. Standing in front of the southwesternmost house reads
+(400, 5482); record 28 sits at (640, 5504), 241 away, with the next nearest
+1136 away -- unambiguous. Walking into that house and out again logs location
+id 28.
+
+So record 28 is a building we can both place and gate on. (The index and the id
+both being 28 is unexplained and may be coincidence; nothing else observed
+supports a general index-to-id relation, and the shops break it -- Barry's is
+door 19 and id 21.)
+
+Note the monster huts cannot be used this way: all five hut records hold
+x = y = 0, so they carry no position at all and must be placed by some other
+means.
+
+**The remaining obstacle is where to put the hook.** The placement table is
+built at runtime and the code that consumes it lives in the town module at
+`0x800b8460`, which is as compressed on disc as the table is. Only
+`slus_006.14` and uncompressed chunk data can be patched directly, so the
+rewrite has to be driven from a stub in the executable's free region, on a path
+that runs after the table exists. The disc-read hook already used for asset
+remapping is the obvious candidate, but it needs a tight guard: the dungeon
+module loads over `0x80088760`-`0x800e5f60`, which covers `0x800d2644`, so an
+unguarded stamp would be writing into dungeon data.
+
 ## Unused disc space
 
 The disc is nominally full: only 251 of 126,946 sectors are blank. But the
