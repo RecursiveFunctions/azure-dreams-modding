@@ -892,6 +892,46 @@ Confirmed working. The house stands at the south gate, its door announces
 location 28, and the gate routes 28 across to the twin -- sector 31133 loaded
 twice on leaving it. Barry's shop goes back to being a shop.
 
+## Where a stub can live
+
+Every mechanism here that cannot be done as a disc edit -- the gate, the asset
+remap, the placement stamp -- is a stub in `slus_006.14`, so free space in that
+executable is the currency the whole project runs on. It had got down to four
+spare bytes, which is what prompted measuring it properly.
+
+**Zero on disc is worthless as evidence.** Scanning `slus` for zero runs of 64
+bytes or more finds about 109 KB, and almost all of it is a trap:
+
+- `0x80010000`-`0x80022800` is 74 KB of zeros and is the *overlay window*. Every
+  shop loads code across it. Obvious in hindsight, invisible to a scanner.
+- `0x80026800`-`0x8002d000` is another 20 KB of zeros, and it is dirty in
+  **every** RAM dump ever taken here -- 8161 bytes touched in the worst case of
+  the first region alone. This is the same trap that ate the read tracer's log
+  ring, which was first placed in a 30 KB region that read as zero in four
+  separate snapshots and was reused by the game anyway.
+
+The test that works is the intersection: **zero on disc *and* zero in every RAM
+dump taken at a different point in play.** Eight dumps spanning town, shops,
+both towns and the tower reduce 109 KB of apparent space to 2.5 KB of real
+space. Of that, most is small change or already spoken for by `trace_cd.py`,
+and three blocks are unclaimed:
+
+| region | bytes | instructions |
+| --- | --- | --- |
+| `0x8007bcb0`-`0x8007bef0` | 576 | 144 |
+| `0x800815b4`-`0x800816cb` | 279 | 69 |
+| `0x80079a10`-`0x80079a58` | 72 | 18 |
+
+The first is the useful one and sits at LBA 182 `+0x4b0`. Note that a run being
+clean in the dumps is not sufficient on its own either: `0x8007aa88`-`0x8007abd8`
+looks like 336 clean bytes but lies inside the tracer's own location ring, which
+was simply never filled. Check candidates against the known allocation list, not
+just against memory.
+
+Keep taking dumps at new points in play. A region is only as trustworthy as the
+most unusual thing the game has been asked to do while being watched, and none
+of these have yet seen a full tower descent.
+
 ## Unused disc space
 
 The disc is nominally full: only 251 of 126,946 sectors are blank. But the
@@ -933,7 +973,9 @@ game already ships and requiring byte-identical output.
   placed in a 30 KB region of RAM that was zero in four separate snapshots. The
   game still reused it, and entering the tower wiped the log. Scratch space must
   go in a gap inside `slus_006.14`, which is loaded once at boot and never
-  reloaded; `0x80079580` and `0x80079e00` are two such gaps.
+  reloaded; `0x80079580` and `0x80079e00` are two such gaps. See "Where a stub
+  can live" for how to tell a real gap from an apparent one, and why 109 KB of
+  zeros turns out to be 2.5 KB of space.
 - **Disc space is available despite the disc being full.** Only 251 of 126,946
   sectors are blank, but the ISO9660 table lists `STR/STAFROLL.STR` at 73.9 MB
   (sectors 88956-126796) plus two files literally named `DUMMY` at 640 KB each.
