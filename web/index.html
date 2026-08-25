@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Azure Dreams Shop Patcher</title>
-<meta name="description" content="Add stock to Barry's shop and turn the monster shop into a working store. Runs entirely in your browser.">
+<meta name="description" content="Choose what Barry's shop and the monster shop sell, set the prices, and patch your disc image. Runs entirely in your browser.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
@@ -22,15 +22,15 @@
     </h1>
     <p class="lede">
       Barry sells two things. The monster shop apologises instead of selling
-      anything at all. This rewrites six sectors of your disc image and fixes
-      both.
+      anything at all. Choose what each of them stocks, name the prices, and
+      this rewrites a handful of sectors on your disc image.
     </p>
   </header>
 
   <!-- Signature element: the whole disc, and the handful of sectors we touch.
-       The band shows where they sit (all of them early, and close together --
-       the shop code is neighbours on the disc). The manifest names them,
-       because at this scale the ticks would otherwise overlap into a smear. -->
+       The band shows where they sit; the manifest names them, because at this
+       scale the ticks would otherwise overlap into a smear. Both follow the
+       stock and prices chosen below. -->
   <section class="discmap" aria-labelledby="discmap-h">
     <h2 id="discmap-h" class="sr-only">Sectors this patch rewrites</h2>
     <div class="discmap-band" id="band">
@@ -39,7 +39,7 @@
       <span class="discmap-end" id="bandEnd" aria-hidden="true">126,946</span>
     </div>
     <div class="discmap-legend">
-      <span class="legend-count"><strong id="touchedCount">6</strong> of
+      <span class="legend-count"><strong id="touchedCount">9</strong> of
         <strong id="totalSectors">126,946</strong> sectors rewritten</span>
       <span class="legend-sep" aria-hidden="true"></span>
       <span class="legend-note" id="bandNote">everything else stays byte-for-byte original</span>
@@ -83,43 +83,86 @@
     <section class="step" aria-labelledby="s2">
       <p class="step-index">02</p>
       <div class="step-body">
-        <h2 id="s2">Choose what changes</h2>
+        <h2 id="s2">Stock the shops</h2>
+        <p class="step-hint">
+          Tick what each shop should sell. Barry takes any item or piece of
+          equipment; the monster shop takes eggs &mdash; one for every monster in
+          the game, not just the ones you can find in the tower. Prices are the
+          game&rsquo;s own sell values, with buying at double, until you change them.
+        </p>
 
-        <label class="opt">
-          <input type="checkbox" id="optBarry" checked>
-          <span class="opt-box" aria-hidden="true"></span>
-          <span class="opt-body">
-            <span class="opt-title">Barry&rsquo;s shop stocks nine items</span>
-            <span class="opt-desc">
-              Keeps the Copper Sword and Medicinal Herb, adds seven monster eggs.
-              Egg prices are set to their sell value so you can&rsquo;t buy and
-              reflip them for profit.
+        <div class="shops">
+          <label class="shop" id="shopBarry">
+            <input type="checkbox" id="optBarry" checked>
+            <span class="opt-box" aria-hidden="true"></span>
+            <span class="shop-body">
+              <span class="shop-title">Barry&rsquo;s shop</span>
+              <span class="shop-count"><strong id="barryCount">9</strong> of <span id="barryMax">62</span> slots</span>
+              <span class="shop-actions">
+                <button type="button" class="mini" data-preset="barry-vanilla">vanilla + eggs</button>
+                <button type="button" class="mini" data-preset="barry-equipment">all equipment</button>
+                <button type="button" class="mini" data-preset="barry-none">clear</button>
+              </span>
             </span>
-            <span class="opt-tags">
-              <span class="tag">KEWNE 100G</span><span class="tag">TROLL 800G</span>
-              <span class="tag">CLOWN 1000G</span><span class="tag">NYUEL 1800G</span>
-              <span class="tag">GRIFFON 2000G</span><span class="tag">ARACHNE 2400G</span>
-              <span class="tag">DRAGON 10000G</span>
-            </span>
-          </span>
-        </label>
+          </label>
 
-        <label class="opt">
-          <input type="checkbox" id="optMonster" checked>
-          <span class="opt-box" aria-hidden="true"></span>
-          <span class="opt-body">
-            <span class="opt-title">The monster shop actually sells monsters</span>
-            <span class="opt-desc">
-              &ldquo;I&rsquo;ve come to buy.&rdquo; opens a table of 24 eggs instead of an
-              apology. Quotes a price, asks you to confirm, takes your gold and
-              puts the egg in your bag.
+          <label class="shop" id="shopMonster">
+            <input type="checkbox" id="optMonster" checked>
+            <span class="opt-box" aria-hidden="true"></span>
+            <span class="shop-body">
+              <span class="shop-title">Monster shop</span>
+              <span class="shop-count"><strong id="monsterCount">45</strong> of <span id="monsterMax">62</span> slots</span>
+              <span class="shop-actions">
+                <button type="button" class="mini" data-preset="monster-all">every egg</button>
+                <button type="button" class="mini" data-preset="monster-tower">tower eggs only</button>
+                <button type="button" class="mini" data-preset="monster-none">clear</button>
+              </span>
             </span>
-            <span class="opt-tags">
-              <span class="tag">price quote</span><span class="tag">confirm prompt</span>
-              <span class="tag">pays gold</span><span class="tag">receives egg</span>
-            </span>
-          </span>
-        </label>
+          </label>
+        </div>
+
+        <div class="catalog">
+          <div class="catalog-tools">
+            <input type="search" id="search" class="search" placeholder="filter by name" aria-label="Filter items by name" autocomplete="off">
+            <div class="chips" id="chips" role="group" aria-label="Categories"></div>
+          </div>
+
+          <div class="catalog-bulk" id="bulk">
+            <span class="bulk-label"><span id="visibleCount">0</span> shown</span>
+            <button type="button" class="mini" data-bulk="barry-on">Barry: stock shown</button>
+            <button type="button" class="mini" data-bulk="barry-off">Barry: drop shown</button>
+            <button type="button" class="mini" data-bulk="monster-on">Monster: stock shown</button>
+            <button type="button" class="mini" data-bulk="monster-off">Monster: drop shown</button>
+            <span class="bulk-sep" aria-hidden="true"></span>
+            <button type="button" class="mini" data-bulk="prices-double">buy = 2 &times; sell</button>
+            <button type="button" class="mini" data-bulk="prices-reset">reset prices</button>
+          </div>
+
+          <div class="table-wrap">
+            <table class="items" id="items">
+              <thead>
+                <tr>
+                  <th class="c-shop" scope="col" title="Stocked by Barry">Barry</th>
+                  <th class="c-shop" scope="col" title="Stocked by the monster shop">Monster</th>
+                  <th class="c-name" scope="col">Item</th>
+                  <th class="c-cat" scope="col">Category</th>
+                  <th class="c-price" scope="col">Sell</th>
+                  <th class="c-price" scope="col">Buy</th>
+                  <th class="c-q" scope="col" title="Quality byte: +N on equipment, charges on balls">Q</th>
+                  <th class="c-note" scope="col"><span class="sr-only">Notes</span></th>
+                </tr>
+              </thead>
+              <tbody id="rows"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="config-io">
+          <button type="button" class="mini" id="exportCfg">export config</button>
+          <label class="mini file-btn">import config<input type="file" id="importCfg" accept="application/json,.json"></label>
+          <button type="button" class="mini" id="resetCfg">reset everything</button>
+          <span class="config-note">The same JSON works with <code>patch.py --config</code>. Your choices are kept in this browser.</span>
+        </div>
       </div>
     </section>
 
@@ -137,7 +180,9 @@
           <a class="dl" id="dlCue" download>Download .cue</a>
           <p class="dl-note">
             Keep both files side by side and open the <code>.cue</code> in your
-            emulator.
+            emulator. Start from the title screen or a memory card save, not a
+            save state: the stock tables live in the executable, which a save
+            state would restore from before the patch.
           </p>
         </div>
       </div>
@@ -149,18 +194,18 @@
     <div class="colophon-col">
       <h3>What it actually edits</h3>
       <p>
-        Barry&rsquo;s stock is built by a hardcoded routine that spells out each
-        item byte by byte. Rewriting it as one immediate plus one store per entry
-        fits nine items in the same instruction budget.
+        Each shop&rsquo;s stock used to be a routine that spelled out its list
+        byte by byte. That routine becomes a nine-instruction loop copying a
+        table from spare room in the game&rsquo;s executable, so the list is as
+        long as you like, up to the 62 rows the shop&rsquo;s own buffer holds.
       </p>
     </div>
     <div class="colophon-col">
-      <h3>Why the monster shop was easy</h3>
+      <h3>Where prices live</h3>
       <p>
-        Its overlay already carried a complete buy-side library &mdash; price
-        lookup, gold deduction, inventory handoff &mdash; sitting unreferenced
-        next to the sell code it mirrors. The patch wires it up rather than
-        writing it.
+        Every item is a 20-byte record with buy and sell prices in it. Only
+        the items you touch are written, and eggs are written twice, because
+        the game keeps one copy for the town and one for the tower.
       </p>
     </div>
     <div class="colophon-col">

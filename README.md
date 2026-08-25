@@ -15,46 +15,69 @@ inject code.
 
 ## The shop patcher
 
-- **Barry's shop stocks nine items** instead of two. The Copper Sword and
-  Medicinal Herb stay; seven monster eggs join them.
+- **Barry's shop stocks what you choose.** Any item or piece of equipment,
+  up to 62 of them. The default keeps the Copper Sword and Medicinal Herb and
+  adds seven monster eggs.
 - **The monster shop actually sells monsters.** In vanilla, picking
   "I've come to buy." leads to an apology and nothing else. Now it opens a
-  table of 24 eggs, quotes a price, asks you to confirm, takes your gold and
-  puts the egg in your bag.
+  table of eggs, quotes a price, asks you to confirm, takes your gold and
+  puts the egg in your bag. The default is one egg for every monster in the
+  game, all 45, not only the 24 the tower drops.
+- **Prices are yours to set.** Buy and sell for every item, with the game's
+  own sell values as the default and buying at double. Sand is 1000G to buy.
 
-Six sectors change. Everything else is byte-for-byte the original.
+Nine sectors change for the defaults. Everything else is byte-for-byte the
+original.
 
-**In a browser** — open `web/index.html`. Pick your `.bin`, tick the changes you
-want, download the result. There is no server; the file never leaves your
-machine. If your browser blocks ES modules on `file://`, serve the folder:
+**In a browser** — open `web/index.html`. Pick your `.bin`, tick what each shop
+should sell, edit prices, download the result. There is no server; the file
+never leaves your machine. Your stock and prices are remembered by the browser
+and can be exported as JSON. If your browser blocks ES modules on `file://`,
+serve the folder:
 
 ```sh
 cd web && python3 -m http.server 8000   # then visit http://localhost:8000
 ```
 
-**On the command line** — `patch.py` needs only the standard library:
+**On the command line** — `patch.py` needs only the standard library and takes
+the same JSON the browser exports:
 
 ```sh
-./patch.py "Azure Dreams (USA).bin"
-./patch.py in.bin -o out.bin --no-barry          # monster shop only
-./patch.py in.bin --verify known-good.bin        # compare, don't write
+./patch.py "Azure Dreams (USA).bin"                    # the defaults
+./patch.py in.bin --dump-config shops.json             # write the defaults, to edit
+./patch.py in.bin -o out.bin --config shops.json
+./patch.py in.bin --verify known-good.bin              # compare, don't write
 ```
+
+The config is three parts: a stock list per shop, each entry `{cat, id,
+quality}` (quality is the +N on equipment or the charges on a ball), and a
+`prices` map of `"cat:id"` to `{buy, sell}`. Only listed prices are written.
 
 | Sector | Contents | Patch |
 | --- | --- | --- |
-| 1883 | monster egg prices | Barry |
-| 6147 | egg list builder | monster shop |
+| 164 | item prices (slus) | prices |
+| 182 | Barry's stock table | Barry |
+| 193 | monster shop stock table | monster shop |
+| 1883 | egg prices | prices |
+| 6147 | list builder | monster shop |
 | 6149 | give-item hook | monster shop |
 | 6158 | buy flow script | monster shop |
 | 6195 | Barry's stock builder | Barry |
-| 14930 | egg prices, second copy | Barry |
+| 14930 | egg prices, second copy | prices |
 
-Whichever patch you pick, **all 24 eggs are repriced** so none can be bought for
-less than it sells for. Vanilla prices nearly every egg at 100G against sell
-values up to 50,000G, which costs nothing while no shop sells eggs — but both
-patches here do, and without the fix an Ultimate egg would be a 100G purchase
-you could immediately resell for 50,000G. Prices are read from the game's own
-table rather than hardcoded, so the rule cannot drift out of step with it.
+Each shop's stock used to be a routine that spelled its list out byte by byte.
+It is replaced with a nine-instruction loop that copies a table out of spare
+room in the executable, so the list can be as long as the shop's own 0x100-byte
+buffer allows. Price edits go into the game's item records; eggs are written
+twice because the table exists once for the town and once for the tower.
+
+A stocked item that sells for more than it costs is a money loop. The patcher
+warns rather than refuses, since the default already prices everything at
+twice its sell value.
+
+**Start from a memory card save or the title screen, not a save state.** The
+stock tables live in `slus_006.14`, which is loaded once at boot; a save state
+restores the pre-patch copy and the shops come up empty.
 
 ## A second town
 
@@ -118,6 +141,9 @@ patch.py            command-line shop patcher, no dependencies
 web/index.html      browser patcher
 web/patcher.js      patch logic (also runs under node)
 web/app.js          interface wiring
+web/config.js       default stock and price rules
+web/items.js        item names and vanilla prices, generated
+tools/gen_items.py  regenerate web/items.js from a disc
 tools/newtown.py    clone a location, add a second town
 tools/trace_cd.py   inject disc-read logging, decode the result
 tools/ramdump.py    pull guest RAM out of a running DuckStation
@@ -132,7 +158,7 @@ both against a known-good image:
 
 ```sh
 ./patch.py vanilla.bin --verify reference.bin
-node tools/compare.mjs vanilla.bin reference.bin
+node tools/compare.mjs vanilla.bin reference.bin [shops.json]
 ```
 
 Both print `MATCH` when the output is byte-identical. Any divergence shows up

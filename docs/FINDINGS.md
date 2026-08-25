@@ -89,6 +89,51 @@ checked before extending the list.
 Entry 0 must stay `{id=0x01, cat=0x16}` — it is the "Pay" pseudo-row that draws
 the menu header, not a purchasable item.
 
+### The list is a table now
+
+Ten entries was the ceiling for anything spelled out in the builder itself.
+The caller zero-fills the destination with `0x80016944(list, 0x100)` before
+calling it, so the buffer at `0x80018ae8` holds **64 entries**: the header,
+up to 62 goods, and the terminator. Everything else about the shop is
+generic -- the menu pages through whatever it is handed.
+
+The builder is therefore replaced with a copy loop, nine instructions in the
+same 22 slots:
+
+```mips
+lui   $v1, 0x8008
+addiu $v1, $v1, TABLE       ; slus scratch, see "Where a stub can live"
+loop:
+lw    $v0, ($v1)
+addiu $v1, $v1, 4
+sw    $v0, ($a0)
+bnez  $v0, loop             ; the terminator is copied, then stops the loop
+addiu $a0, $a0, 4
+jr    $ra
+nop
+```
+
+The load is two instructions ahead of the store, which the R3000's load
+delay needs. The table is `{header, entries..., 0}` of 4-byte
+`{id, category, quality, 0}` words, with the header `01 16 00 00` copied
+from the vanilla source at `0x80018a98`. Barry's table sits at
+`0x8007bdf0`, the top 256 bytes of the big free block; the monster shop's at
+`0x800815b4`. Both are zero on disc and clean in every RAM dump.
+
+The quality byte matters for two categories. Balls and equipment go through
+the price routine at `0x8004a4e4`: `price + (price / 10) * quality`, times 5 if
+bit 6 of the flags byte is set, floor 1. So a +3 sword quotes 130% of its
+table price, and a ball with 0 in that byte is a ball with no charges.
+
+Nothing in the buy path checks categories, so Barry can list anything with a
+record in the category table. The monster shop's transfer core skips
+category `0x18` (furniture, which has its own path) and otherwise adds
+whatever is marked with flag `0x20`. Familiars (category `0x13`) are the
+exception worth naming: their bag entry is a reference to a monster-hut slot
+in the low bits of the flags byte, not a thing in itself, so "buying" one
+would add a dangling reference. Eggs are ordinary items and there is one for
+every monster, so the shop sells eggs.
+
 ## Items are uniform
 
 Category descriptor table at RAM `0x80073414`, 20-byte stride, with the item
@@ -107,10 +152,27 @@ makes them stockable anywhere. Their array is stored twice (sectors 1883 in
 `main.bin` and 14930 in `dungeon.bin`); editing one copy alone produces prices
 that change depending on where you are.
 
-There are 24 egg items, ids `0x01`–`0x18`. Egg `0x01` is "Ultimate"; from `0x02`
-up they line up with monster ids (`0x02` KEWNE, `0x03` DRAGON … `0x18` U-BOAT).
-The monster roster itself runs to 45 (`0x01`–`0x2d`), so the 21 monsters past
-U-BOAT have no egg item and cannot be sold in a shop.
+The egg category declares 64 rows, and **45 of them are real eggs**: `0x01`
+is "Ultimate", and from `0x02` up they line up with monster ids all the way
+to `0x2d` MAXIMUM, wild monsters included. An earlier note here stopped at
+`0x18` U-BOAT; that was the loop bound of the first monster-shop patch, not a
+property of the table. Rows `0x2e` onward are named for NPCs and scenery
+(Salaman, Ghosh, "fire wall", Beldo...) and are monster-book filler, not
+goods.
+
+The category descriptor is worth spelling out, since the patcher reads it
+rather than hardcoding array addresses:
+
+| Offset | Field |
+| --- | --- |
+| `+0x02` | row count (u8) |
+| `+0x04` | category name pointer |
+| `+0x08` | price routine, or 0 (`0x8004a4e4` for balls, swords, wands, shields) |
+| `+0x0c` | item array pointer |
+| `+0x10` | use class: 0 consumable, 1 equipment, 2 egg, 3 familiar |
+
+Every array but the egg array is in `slus_006.14` at `RAM - 0x80020800`.
+`tools/gen_items.py` dumps the lot into `web/items.js`.
 
 **Vanilla egg buy prices are a trap for anyone adding a shop.** Nearly every egg
 costs 100G and sells for far more — Ultimate is 100G buy against 50,000G sell,
@@ -180,9 +242,11 @@ Shop globals, all `lui 0x8002` plus a negative `addiu`:
 ### What the patch does
 
 1. **Sector 6147** — the list builder at `0x800165c4` emits category `0x18`
-   (furniture). Three words change it: category `0x18` → `0x12`, `nop` out the
-   `ori $v0, $v0, 0x80` that greys every row out, and lower the loop bound to
-   24.
+   (furniture), greying out every row it finds unowned. It becomes the same
+   copy loop Barry's builder does, reading the table at `0x800815b4`. (The
+   first revision instead changed three words inside it -- category, the
+   grey-out `ori`, and the loop bound -- which capped the list at eggs
+   `0x01`-`0x18`; those words are restored to vanilla when found.)
 2. **Sector 6149** — `0x800170e8` is the buy-mode inventory wrapper, but it
    expects the list in `$a0` while script opcode `0x4c` calls with no arguments.
    It has no callers, so it is rewritten as a four-instruction nullary tail call
@@ -922,7 +986,10 @@ and three blocks are unclaimed:
 | `0x800815b4`-`0x800816cb` | 279 | 69 |
 | `0x80079a10`-`0x80079a58` | 72 | 18 |
 
-The first is the useful one and sits at LBA 182 `+0x4b0`. Note that a run being
+The first is the useful one and sits at LBA 182 `+0x4b0`. Allocations so far:
+`newtown.py`'s extended gate stub from `0x8007bcb0` (limit `0x8007bdf0`), the
+shop patcher's Barry stock table at `0x8007bdf0`-`0x8007bef0`, and its
+monster shop table at `0x800815b4`-`0x800816b4` in the second block. Note that a run being
 clean in the dumps is not sufficient on its own either: `0x8007aa88`-`0x8007abd8`
 looks like 336 clean bytes but lies inside the tracer's own location ring, which
 was simply never filled. Check candidates against the known allocation list, not

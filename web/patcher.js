@@ -4,6 +4,20 @@
  * A direct port of patch.py. Pure computation, no DOM, so it runs equally well
  * in a browser or under node (see ../tools/compare.mjs, which uses that to
  * prove both implementations emit identical bytes).
+ *
+ * Everything is driven by one config object, the same JSON the command-line
+ * patcher accepts:
+ *
+ *   {
+ *     barry:       { enabled: true, stock: [{ cat, id, quality }, ...] },
+ *     monsterShop: { enabled: true, stock: [{ cat, id, quality }, ...] },
+ *     prices:      { "<cat>:<id>": { buy, sell }, ... }
+ *   }
+ *
+ * A shop's stock is written as a table into free space in slus_006.14, and the
+ * routine that used to hardcode the shop's list becomes a loop that copies the
+ * table. Prices are written into the game's own item records, and only for the
+ * entries listed -- everything else stays byte-for-byte original.
  */
 
 // ---------------------------------------------------------------------------
@@ -123,6 +137,15 @@ class Image {
     }
   }
 
+  readU16(streamOff) {
+    const b = this.read(streamOff, 2);
+    return b[0] | (b[1] << 8);
+  }
+
+  writeU16(streamOff, val) {
+    this.write(streamOff, Uint8Array.of(val & 0xff, (val >>> 8) & 0xff));
+  }
+
   readU32(streamOff) {
     const b = this.read(streamOff, 4);
     return (b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24)) >>> 0;
@@ -178,9 +201,21 @@ function hexOff(v) {
   return '0x' + v.toString(16).padStart(8, '0');
 }
 
+function wordsToBytes(words) {
+  const out = new Uint8Array(words.length * 4);
+  words.forEach((w, i) => putU32(out, i * 4, w));
+  return out;
+}
+
+function bytesEqual(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
 /** Recompute EDC/ECC on untouched sectors; they must come out identical. */
 function selftest(buf) {
-  for (const lba of [1883, 5000, 6147, 6149, 6158, 6195, 14930]) {
+  for (const lba of [182, 193, 1883, 5000, 6147, 6149, 6158, 6195, 14930]) {
     const base = lba * SECTOR;
     if (base + SECTOR > buf.length) continue;
     const orig = buf.slice(base, base + SECTOR);
@@ -201,13 +236,277 @@ function selftest(buf) {
 // ---------------------------------------------------------------------------
 // MIPS
 // ---------------------------------------------------------------------------
-const ZERO = 0, V1 = 3, A0 = 4, A1 = 5;
+const ZERO = 0, V0 = 2, V1 = 3, A0 = 4, A1 = 5, RA = 31;
 const addiu = (rt, rs, imm) => (((0x09 << 26) | (rs << 21) | (rt << 16) | (imm & 0xffff)) >>> 0);
+const lw = (rt, base, off) => (((0x23 << 26) | (base << 21) | (rt << 16) | (off & 0xffff)) >>> 0);
 const sw = (rt, base, off) => (((0x2b << 26) | (base << 21) | (rt << 16) | (off & 0xffff)) >>> 0);
 const lui = (rt, imm) => (((0x0f << 26) | (rt << 16) | (imm & 0xffff)) >>> 0);
+const bne = (rs, rt, off) => (((0x05 << 26) | (rs << 21) | (rt << 16) | (off & 0xffff)) >>> 0);
 const move = (rd, rs) => (((rs << 21) | (rd << 11) | 0x21) >>> 0);
 const jmp = (target) => ((0x08000000 | ((target >>> 2) & 0x03ffffff)) >>> 0);
-const JR_RA = 0x03e00008;
+const jr = (rs) => (((rs << 21) | 0x08) >>> 0);
+const NOP = 0;
+
+// ---------------------------------------------------------------------------
+// Addresses
+// ---------------------------------------------------------------------------
+
+// slus_006.14 is loaded once at boot and stays resident, so a RAM address in
+// it maps to the disc by a constant.
+const SLUS_DELTA = 0x80020800;
+const slusS = (ram) => ram - SLUS_DELTA;
+
+// Category descriptor table in slus: 20-byte records, item array pointer at
+// +0x0c. Item records are 20 bytes with u16 buy at +0x10 and sell at +0x12.
+const CAT_TABLE = 0x80073414;
+const CAT_STRIDE = 20;
+const CAT_ARR_OFF = 0x0c;
+const ITEM_RECORD = 20;
+const BUY_PRICE_OFF = 0x10;
+const SELL_PRICE_OFF = 0x12;
+
+// The egg array is not in slus. It lives in main.bin and again in
+// dungeon.bin, because town and tower each need item data; a price edit has
+// to be mirrored or the value changes depending on where the player stands.
+const CAT_EGG = 0x12;
+const EGG_ARRAY_RAM = 0x8002ca68;
+const EGG_ARRAYS = [0x003ada68, 0x01d29268];
+
+// Where the stock tables go. Both blocks are zero on disc and untouched in
+// every RAM dump taken across town, both shops, both towns and the tower
+// (docs/FINDINGS.md, "Where a stub can live"). 0x8007bcb0-0x8007bdf0 below
+// Barry's table is reserved for newtown.py's extended gate stub.
+const LIST_CAPACITY = 64;                 // the shop's list buffer is 0x100 bytes
+export const MAX_STOCK = LIST_CAPACITY - 2; // minus the header row and terminator
+const BARRY_TABLE = 0x8007bdf0;           // 256 bytes, to 0x8007bef0
+const MONSTER_TABLE = 0x800815b4;         // 256 bytes, to 0x800816b4
+
+// The "Pay" pseudo-row that draws the menu header. Both shops copy the same
+// four bytes from their own chunk; it has to stay entry 0.
+const HEADER_ROW = 0x00001601;
+
+function stockWord(entry, i) {
+  const { cat, id } = entry;
+  const q = entry.quality | 0;
+  if (!(id > 0 && id < 256) || !(cat > 0 && cat < 256)) {
+    throw new PatchError(`Stock entry ${i}: id/category out of range.`);
+  }
+  if (q < -128 || q > 127) {
+    throw new PatchError(`Stock entry ${i}: quality ${q} does not fit a byte.`);
+  }
+  return ((id) | (cat << 8) | ((q & 0xff) << 16)) >>> 0;
+}
+
+/** The table a shop's builder copies: header, entries, zero terminator. */
+function buildStockTable(stock) {
+  if (stock.length > MAX_STOCK) {
+    throw new PatchError(`${stock.length} items; a shop can list at most ${MAX_STOCK}.`);
+  }
+  const seen = new Set();
+  const words = [HEADER_ROW];
+  stock.forEach((e, i) => {
+    const key = `${e.cat}:${e.id}`;
+    if (seen.has(key)) throw new PatchError(`Stock entry ${i} duplicates ${key}.`);
+    seen.add(key);
+    words.push(stockWord(e, i));
+  });
+  words.push(0);
+  return words;
+}
+
+/**
+ * The builder that replaces a shop's hardcoded list: copy words from TABLE
+ * to the list buffer in $a0 until the zero terminator has been copied too.
+ * Nine instructions, leaf, clobbers only $v0/$v1/$a0. The load in the loop
+ * is two instructions ahead of its use, which the R3000's delay slot needs.
+ */
+function buildCopyLoop(table) {
+  const hi = (table >>> 16) + ((table & 0x8000) ? 1 : 0);
+  return [
+    lui(V1, hi),
+    addiu(V1, V1, table & 0xffff),
+    lw(V0, V1, 0),             // loop:
+    addiu(V1, V1, 4),
+    sw(V0, A0, 0),
+    bne(V0, ZERO, -4),         // back to loop (offset from the delay slot)
+    addiu(A0, A0, 4),
+    jr(RA),
+    NOP,
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Prices
+// ---------------------------------------------------------------------------
+
+/** Stream offsets of every copy of an item's price fields. */
+function priceRecords(img, cat, id) {
+  const arr = img.readU32(slusS(CAT_TABLE + cat * CAT_STRIDE + CAT_ARR_OFF));
+  if (cat === CAT_EGG) {
+    if (arr !== EGG_ARRAY_RAM) {
+      throw new PatchError(`Egg array pointer is ${hex32(arr)}, expected ${hex32(EGG_ARRAY_RAM)}.`);
+    }
+    return EGG_ARRAYS.map((a) => a + id * ITEM_RECORD);
+  }
+  if (arr < 0x8002d000 || arr >= 0x80081800) {
+    throw new PatchError(`Category ${cat} item array pointer ${hex32(arr)} is not in slus.`);
+  }
+  return [slusS(arr) + id * ITEM_RECORD];
+}
+
+function parseKey(key) {
+  const m = /^(\d+):(\d+)$/.exec(key);
+  if (!m) throw new PatchError(`Bad price key "${key}"; expected "<cat>:<id>".`);
+  return { cat: +m[1], id: +m[2] };
+}
+
+function checkPrice(v, what, key) {
+  if (!Number.isInteger(v) || v < 0 || v > 0xffff) {
+    throw new PatchError(`${what} price for ${key} must be 0..65535, got ${v}.`);
+  }
+}
+
+function applyPrices(img, prices, stocked, log) {
+  let changed = 0;
+  let same = 0;
+  const keys = Object.keys(prices || {}).sort((a, b) => {
+    const ka = parseKey(a), kb = parseKey(b);
+    return ka.cat - kb.cat || ka.id - kb.id;
+  });
+  for (const key of keys) {
+    const { cat, id } = parseKey(key);
+    const { buy, sell } = prices[key];
+    checkPrice(buy, 'buy', key);
+    checkPrice(sell, 'sell', key);
+    if (stocked.has(key) && buy < sell) {
+      log(`warning: ${key} buys for ${buy}G and sells for ${sell}G; that is a money loop`);
+    }
+    let wrote = false;
+    for (const rec of priceRecords(img, cat, id)) {
+      if ((rec + BUY_PRICE_OFF) % DATA > DATA - 4) {
+        throw new PatchError(`Price fields for ${key} straddle a sector.`);
+      }
+      if (img.readU16(rec + BUY_PRICE_OFF) !== buy) { img.writeU16(rec + BUY_PRICE_OFF, buy); wrote = true; }
+      if (img.readU16(rec + SELL_PRICE_OFF) !== sell) { img.writeU16(rec + SELL_PRICE_OFF, sell); wrote = true; }
+    }
+    if (wrote) changed++; else same++;
+  }
+  log(`item prices      ${changed} written, ${same} already as requested`);
+}
+
+// ---------------------------------------------------------------------------
+// Patch A: Barry's shop
+//
+// Barry's stock comes from a hardcoded routine (RAM 0x800165c4, stream
+// 0x00c19dc4) that writes a NUL-terminated list of 4-byte entries into a
+// 0x100-byte buffer. Vanilla spells out each byte individually. It becomes the
+// copy loop above, reading BARRY_TABLE.
+// ---------------------------------------------------------------------------
+const BARRY_BUILDER = 0x00c19dc4;
+const BARRY_SLOTS = 22;
+
+// Whatever occupies the builder before patching: vanilla, the earlier
+// nine-item revision of this patch, or this one.
+const BARRY_KNOWN_HEADS = [0x00801021, 0x24031601, 0x3c038008];
+
+function applyBarry(img, stock, log) {
+  const table = buildStockTable(stock);
+  const code = buildCopyLoop(BARRY_TABLE);
+  while (code.length < BARRY_SLOTS) code.push(NOP);
+
+  const head = img.readU32(BARRY_BUILDER);
+  if (!BARRY_KNOWN_HEADS.includes(head)) {
+    throw new PatchError(
+      `Unexpected data at Barry's stock builder (${hex32(head)}). ` +
+      'Is this an unmodified Azure Dreams (USA) image?'
+    );
+  }
+  img.write(BARRY_BUILDER, wordsToBytes(code));
+  let b = streamToBin(BARRY_BUILDER);
+  log(`stock builder    ${hexOff(b.off)}  sector ${b.lba}  copy loop, ${stock.length} items`);
+
+  img.write(slusS(BARRY_TABLE), wordsToBytes(padTable(table)));
+  b = streamToBin(slusS(BARRY_TABLE));
+  log(`stock table      ${hexOff(b.off)}  sector ${b.lba}  ${table.length * 4} of ${LIST_CAPACITY * 4} bytes`);
+}
+
+/** Zero the rest of the table's block so a shorter list leaves no stale tail. */
+function padTable(words) {
+  const out = words.slice();
+  while (out.length < LIST_CAPACITY) out.push(0);
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Patch B: monster shop
+//
+// The monster shop overlay occupies RAM 0x8001xxxx but is stitched together
+// from two different disc regions, so code and script need separate deltas.
+//
+// The overlay carries a complete but entirely unreferenced buy-side library,
+// mirroring the sell side it sits next to:
+//
+//     purpose               sell         buy
+//     price -> AMOUNT       0x8001679c   0x80016770   (same core, a1=0)
+//     gold                  0x80016818   0x800167f0   (add / subtract)
+//     affordability            --        0x800167c8
+//     inventory transfer    0x80016850   0x800170e8   (same core, mode=0)
+//     read AMOUNT           0x80016840   0x80016840
+//
+// So the buy flow below is a structural mirror of the known-good sell branch.
+// ---------------------------------------------------------------------------
+const CODE_DELTA = 0xbeb800;
+const SCRIPT_DELTA = 0xbed2e8;
+const codeS = (ram) => (ram & 0x1fffff) + CODE_DELTA;
+const scriptS = (ram) => (ram & 0x1fffff) + SCRIPT_DELTA;
+
+// The list builder at 0x800165c4 emits furniture; it becomes the copy loop
+// reading MONSTER_TABLE. Vanilla begins with a stack frame, this patch with
+// the loop's lui. (An earlier revision of this patch edited three words
+// inside the vanilla function instead; its head is still vanilla's.)
+const MONSTER_BUILDER = 0x800165c4;
+const MONSTER_KNOWN_HEADS = [0x27bdffd8, 0x3c038008];
+
+// The three words that earlier revision changed, restored to vanilla so an
+// image patched twice comes out identical to one patched once.
+const MONSTER_OLD_PATCH = [
+  [0x80016600, 0x24130012, 0x24130018],
+  [0x80016628, 0x00000000, 0x34420080],
+  [0x80016634, 0x2a220019, 0x2a220021],
+];
+
+// 0x800170e8 is the buy-mode inventory wrapper, but it expects the list in $a0
+// while script opcode 0x4c calls with no arguments. It has zero callers, so it
+// is rewritten as a nullary tail call that supplies CTX+4 itself.
+const GIVE_WRAPPER = 0x800170e8;
+const XFER_CORE = 0x8001702c;
+const CTX_PLUS_4_LO = 0x88d4; // 0x80020000 - 0x772c = 0x800188d4
+
+const GIVE_WRAPPER_PATCHES = [
+  [GIVE_WRAPPER + 0x0, 0x27bdffe8, lui(A0, 0x8002), 'lui   $a0, 0x8002'],
+  [GIVE_WRAPPER + 0x4, 0xafbf0010, move(A1, ZERO), 'move  $a1, $zero'],
+  [GIVE_WRAPPER + 0x8, 0x0c005c0b, jmp(XFER_CORE), 'j     transfer core'],
+  [GIVE_WRAPPER + 0xc, 0x00002821, addiu(A0, A0, CTX_PLUS_4_LO), 'addiu $a0, $a0, -0x772c'],
+];
+
+const BUY_ARM = 0x8001a1b0;
+const BUY_ARM_LIMIT = 0x8001a3bc; // the "just looking" branch starts here
+
+const PICKER = 0x80018d1c;
+const BUY_PRICE = 0x80016770;
+const CAN_AFFORD = 0x800167c8;
+const GOLD_SUB = 0x800167f0;
+const READ_AMOUNT = 0x80016840;
+const SFX = 0x800164a0;
+const EXIT_CHAIN = 0x8001a1a6;
+
+// Whatever occupies the buy arm before patching: the vanilla apology, or an
+// earlier revision of this patch.
+const BUY_ARM_KNOWN_HEADS = [
+  [0x08, 0x57, 0x26],
+  [0x11, 0x08, 0x15],
+  [0x08, 0x15],
+];
 
 // ---------------------------------------------------------------------------
 // Script bytecode
@@ -280,186 +579,12 @@ class Script {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Patch A: Barry's shop
-//
-// Barry's stock comes from a hardcoded routine (RAM 0x800165c4, stream
-// 0x00c19dc4) that writes a NUL-terminated list of 4-byte entries. Vanilla
-// spells out each byte individually; one immediate plus one word-store per
-// entry fits 10 entries in the same 22 instruction slots.
-// ---------------------------------------------------------------------------
-const BARRY_BUILDER = 0x00c19dc4;
-const BARRY_SLOTS = 22;
-const BARRY_ORIGINAL_HEAD = [0x00801021, 0x3c038002, 0x24678a98];
-
-const CAT_EGG = 0x12;
-
-// Entry 0 must stay the "Pay" pseudo-row that renders the menu header.
-export const BARRY_STOCK = [
-  [0x01, 0x16, 'Pay (header row)'],
-  [0x02, 0x0f, 'Copper Sword'],
-  [0x01, 0x01, 'Medicinal Herb'],
-  [0x02, CAT_EGG, 'KEWNE egg'],
-  [0x16, CAT_EGG, 'TROLL egg'],
-  [0x10, CAT_EGG, 'CLOWN egg'],
-  [0x0e, CAT_EGG, 'NYUEL egg'],
-  [0x08, CAT_EGG, 'GRIFFON egg'],
-  [0x0c, CAT_EGG, 'ARACHNE egg'],
-  [0x03, CAT_EGG, 'DRAGON egg'],
-];
-
-// The egg item array lives in main.bin and again in dungeon.bin, because both
-// need item data. Price edits must be mirrored or the value would change
-// depending on whether you are in town or up the tower.
-const EGG_ARRAYS = [0x003ada68, 0x01d29268];
-const ITEM_RECORD = 20;
-const BUY_PRICE_OFF = 0x10;
-const SELL_PRICE_OFF = 0x12;
-const N_EGG_ITEMS = 24; // egg ids 0x01..0x18. The monster roster has 45
-                        // entries, but only these have egg items.
-
-function eggPrices(img, iid) {
-  const rec = EGG_ARRAYS[0] + iid * ITEM_RECORD;
-  const b = img.read(rec + BUY_PRICE_OFF, 4);
-  return { buy: b[0] | (b[1] << 8), sell: b[2] | (b[3] << 8) };
-}
-
-/**
- * Raise every egg's buy price to its sell value.
- *
- * Vanilla prices nearly every egg at 100G while some sell for thousands -- an
- * Ultimate egg costs 100G and sells for 50000G. Harmless in vanilla, where no
- * shop sells eggs, but both patches here do, so leaving it alone would hand the
- * player an unlimited money loop.
- *
- * Values are read out of the image rather than hardcoded, so this cannot drift
- * out of step with the game's own table.
- */
-function applyEggPrices(img, log) {
-  const price = new Uint8Array(2);
-  let raised = 0;
-  for (let iid = 1; iid <= N_EGG_ITEMS; iid++) {
-    const { buy, sell } = eggPrices(img, iid);
-    if (buy >= sell) continue;
-    price[0] = sell & 0xff;
-    price[1] = (sell >>> 8) & 0xff;
-    for (const arr of EGG_ARRAYS) {
-      img.write(arr + iid * ITEM_RECORD + BUY_PRICE_OFF, price);
-    }
-    raised++;
-  }
-  log(raised
-    ? `egg prices      raised ${raised} of ${N_EGG_ITEMS} to sell value, both copies`
-    : `egg prices      all ${N_EGG_ITEMS} already at or above sell value`);
-}
-
-function applyBarry(img, log) {
-  const code = [];
-  BARRY_STOCK.forEach(([iid, cat], i) => {
-    const word = (cat << 8) | iid;
-    if (word >= 0x8000) throw new PatchError(`Entry ${i} would sign-extend.`);
-    code.push(addiu(V1, ZERO, word), sw(V1, A0, i * 4));
-  });
-  code.push(JR_RA, sw(ZERO, A0, BARRY_STOCK.length * 4));
-
-  if (code.length > BARRY_SLOTS) {
-    throw new PatchError(`Stock list needs ${code.length} slots, budget is ${BARRY_SLOTS}.`);
-  }
-
-  const payload = new Uint8Array(code.length * 4);
-  code.forEach((c, i) => putU32(payload, i * 4, c));
-
-  const head = img.read(BARRY_BUILDER, 12);
-  const headWords = [getU32(head, 0), getU32(head, 4), getU32(head, 8)];
-  const matchesOriginal = headWords.every((w, i) => w === BARRY_ORIGINAL_HEAD[i]);
-  if (!matchesOriginal) {
-    const cur = img.read(BARRY_BUILDER, payload.length);
-    let same = true;
-    for (let i = 0; i < payload.length; i++) if (cur[i] !== payload[i]) { same = false; break; }
-    if (!same) {
-      throw new PatchError(
-        `Unexpected data at Barry's stock builder (${headWords.map(hex32).join(' ')}). ` +
-        'Is this an unmodified Azure Dreams (USA) image?'
-      );
-    }
-  }
-  img.write(BARRY_BUILDER, payload);
-  const b = streamToBin(BARRY_BUILDER);
-  log(`stock builder    ${hexOff(b.off)}  sector ${b.lba}  ` +
-      `${code.length}/${BARRY_SLOTS} slots, ${BARRY_STOCK.length - 1} items`);
-}
-
-// ---------------------------------------------------------------------------
-// Patch B: monster shop
-//
-// The monster shop overlay occupies RAM 0x8001xxxx but is stitched together
-// from two different disc regions, so code and script need separate deltas.
-//
-// The overlay carries a complete but entirely unreferenced buy-side library,
-// mirroring the sell side it sits next to:
-//
-//     purpose               sell         buy
-//     price -> AMOUNT       0x8001679c   0x80016770   (same core, a1=0)
-//     gold                  0x80016818   0x800167f0   (add / subtract)
-//     affordability            --        0x800167c8
-//     inventory transfer    0x80016850   0x800170e8   (same core, mode=0)
-//     read AMOUNT           0x80016840   0x80016840
-//
-// So the buy flow below is a structural mirror of the known-good sell branch.
-// ---------------------------------------------------------------------------
-const CODE_DELTA = 0xbeb800;
-const SCRIPT_DELTA = 0xbed2e8;
-const codeS = (ram) => (ram & 0x1fffff) + CODE_DELTA;
-const scriptS = (ram) => (ram & 0x1fffff) + SCRIPT_DELTA;
-
-const N_EGGS = 24; // egg ids 0x01..0x18
-
-// The list builder at 0x800165c4 emits furniture; retarget it at eggs.
-const LIST_BUILDER_PATCHES = [
-  [0x80016600, 0x24130018, (0x24130000 | CAT_EGG) >>> 0, 'category: furniture -> egg'],
-  [0x80016628, 0x34420080, 0x00000000, 'stop flagging every entry unavailable'],
-  [0x80016634, 0x2a220021, (0x2a220000 | (N_EGGS + 1)) >>> 0, `loop bound -> ${N_EGGS}`],
-];
-
-// 0x800170e8 is the buy-mode inventory wrapper, but it expects the list in $a0
-// while script opcode 0x4c calls with no arguments. It has zero callers, so it
-// is rewritten as a nullary tail call that supplies CTX+4 itself.
-const GIVE_WRAPPER = 0x800170e8;
-const XFER_CORE = 0x8001702c;
-const CTX_PLUS_4_LO = 0x88d4; // 0x80020000 - 0x772c = 0x800188d4
-
-const GIVE_WRAPPER_PATCHES = [
-  [GIVE_WRAPPER + 0x0, 0x27bdffe8, lui(A0, 0x8002), 'lui   $a0, 0x8002'],
-  [GIVE_WRAPPER + 0x4, 0xafbf0010, move(A1, ZERO), 'move  $a1, $zero'],
-  [GIVE_WRAPPER + 0x8, 0x0c005c0b, jmp(XFER_CORE), 'j     transfer core'],
-  [GIVE_WRAPPER + 0xc, 0x00002821, addiu(A0, A0, CTX_PLUS_4_LO), 'addiu $a0, $a0, -0x772c'],
-];
-
-const BUY_ARM = 0x8001a1b0;
-const BUY_ARM_LIMIT = 0x8001a3bc; // the "just looking" branch starts here
-
-const PICKER = 0x80018d1c;
-const BUY_PRICE = 0x80016770;
-const CAN_AFFORD = 0x800167c8;
-const GOLD_SUB = 0x800167f0;
-const READ_AMOUNT = 0x80016840;
-const SFX = 0x800164a0;
-const EXIT_CHAIN = 0x8001a1a6;
-
-// Whatever occupies the buy arm before patching: the vanilla apology, or an
-// earlier revision of this patch.
-const BUY_ARM_KNOWN_HEADS = [
-  [0x08, 0x57, 0x26],
-  [0x11, 0x08, 0x15],
-  [0x08, 0x15],
-];
-
 function buildBuyArm() {
   const s = new Script(BUY_ARM);
 
   s.op(0x08);
   s.label('retry');
-  s.gosub(PICKER);            // let the player mark eggs
+  s.gosub(PICKER);            // let the player mark goods
   s.ifZero(EXIT_CHAIN);       // backed out of the table
 
   s.op(0x08);
@@ -500,12 +625,27 @@ function buildBuyArm() {
   return s.assemble();
 }
 
-function applyMonsterShop(img, log) {
-  for (const [ram, expect, next, note] of LIST_BUILDER_PATCHES) {
-    img.patchU32(codeS(ram), expect, next, note);
+function applyMonsterShop(img, stock, log) {
+  const table = buildStockTable(stock);
+  const code = buildCopyLoop(MONSTER_TABLE);
+
+  const head = img.readU32(codeS(MONSTER_BUILDER));
+  if (!MONSTER_KNOWN_HEADS.includes(head)) {
+    throw new PatchError(
+      `Unexpected data at the monster shop's list builder (${hex32(head)}). ` +
+      'Is this an unmodified Azure Dreams (USA) image?'
+    );
   }
-  let b = streamToBin(codeS(LIST_BUILDER_PATCHES[0][0]));
-  log(`egg list builder ${hexOff(b.off)}  sector ${b.lba}  ${N_EGGS} eggs`);
+  img.write(codeS(MONSTER_BUILDER), wordsToBytes(code));
+  for (const [ram, old, vanilla] of MONSTER_OLD_PATCH) {
+    if (img.readU32(codeS(ram)) === old) img.writeU32(codeS(ram), vanilla);
+  }
+  let b = streamToBin(codeS(MONSTER_BUILDER));
+  log(`list builder     ${hexOff(b.off)}  sector ${b.lba}  copy loop, ${stock.length} items`);
+
+  img.write(slusS(MONSTER_TABLE), wordsToBytes(padTable(table)));
+  b = streamToBin(slusS(MONSTER_TABLE));
+  log(`stock table      ${hexOff(b.off)}  sector ${b.lba}  ${table.length * 4} of ${LIST_CAPACITY * 4} bytes`);
 
   for (const [ram, expect, next, note] of GIVE_WRAPPER_PATCHES) {
     img.patchU32(codeS(ram), expect, next, note);
@@ -518,9 +658,7 @@ function applyMonsterShop(img, log) {
     throw new PatchError(`Buy flow is ${arm.length} bytes; only ${BUY_ARM_LIMIT - BUY_ARM} fit.`);
   }
   const cur = img.read(scriptS(BUY_ARM), arm.length);
-  let same = true;
-  for (let i = 0; i < arm.length; i++) if (cur[i] !== arm[i]) { same = false; break; }
-  if (!same) {
+  if (!bytesEqual(cur, arm)) {
     const known = BUY_ARM_KNOWN_HEADS.some((h) => h.every((v, i) => cur[i] === v));
     if (!known) {
       throw new PatchError(
@@ -538,33 +676,54 @@ function applyMonsterShop(img, log) {
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
+function normalize(config) {
+  const shop = (s) => ({
+    enabled: !!(s && s.enabled),
+    stock: (s && Array.isArray(s.stock) ? s.stock : []).map((e) => ({
+      cat: e.cat | 0, id: e.id | 0, quality: e.quality | 0,
+    })),
+  });
+  return {
+    barry: shop(config.barry),
+    monsterShop: shop(config.monsterShop),
+    prices: config.prices || {},
+  };
+}
+
 /**
  * Patch a disc image in place.
  *
  * @param {Uint8Array} buf   the whole .bin, modified in place
- * @param {{barry:boolean, monsterShop:boolean}} opts
+ * @param {object} config    see the header comment
  * @param {(line:string)=>void} log
  * @returns {{touched:number[], totalSectors:number}}
  */
-export function patchImage(buf, opts, log = () => {}) {
+export function patchImage(buf, config, log = () => {}) {
   if (buf.length % SECTOR !== 0) {
     throw new PatchError(
       `This image is ${buf.length} bytes, which is not a whole number of ` +
       '2352-byte sectors. The patcher needs a MODE2/2352 .bin, not a 2048-byte-per-sector rip.'
     );
   }
-  if (!opts.barry && !opts.monsterShop) {
-    throw new PatchError('Pick at least one change to apply.');
+  const cfg = normalize(config);
+  if (!cfg.barry.enabled && !cfg.monsterShop.enabled) {
+    throw new PatchError('Pick at least one shop to patch.');
   }
 
   selftest(buf);
   log('error-correction self-test passed');
 
   const img = new Image(buf);
-  if (opts.barry) applyBarry(img, log);
-  if (opts.monsterShop) applyMonsterShop(img, log);
-  // Either shop makes eggs purchasable, so pricing has to run for both.
-  applyEggPrices(img, log);
+  const stocked = new Set();
+  if (cfg.barry.enabled) {
+    applyBarry(img, cfg.barry.stock, log);
+    cfg.barry.stock.forEach((e) => stocked.add(`${e.cat}:${e.id}`));
+  }
+  if (cfg.monsterShop.enabled) {
+    applyMonsterShop(img, cfg.monsterShop.stock, log);
+    cfg.monsterShop.stock.forEach((e) => stocked.add(`${e.cat}:${e.id}`));
+  }
+  applyPrices(img, cfg.prices, stocked, log);
 
   img.finalize();
   const bad = img.checkSectors();
@@ -575,6 +734,41 @@ export function patchImage(buf, opts, log = () => {}) {
   const touched = [...img.touched].sort((a, b) => a - b);
   log(`rewrote error-correction for sectors ${touched.join(', ')}`);
   return { touched, totalSectors: buf.length / SECTOR };
+}
+
+/**
+ * The sectors a config would rewrite, and why, without needing the image.
+ * Uses the category array pointers the caller supplies (web/items.js carries
+ * them); patchImage re-reads them from the disc and checks they agree.
+ */
+export function planSectors(config, categories) {
+  const cfg = normalize(config);
+  const roles = new Map();
+  const add = (stream, role) => {
+    const { lba } = streamToBin(stream);
+    if (!roles.has(lba)) roles.set(lba, role);
+  };
+  if (cfg.barry.enabled) {
+    add(BARRY_BUILDER, 'Barry’s stock builder');
+    add(slusS(BARRY_TABLE), 'Barry’s stock table');
+  }
+  if (cfg.monsterShop.enabled) {
+    add(codeS(MONSTER_BUILDER), 'monster shop list builder');
+    add(slusS(MONSTER_TABLE), 'monster shop stock table');
+    add(codeS(GIVE_WRAPPER), 'give-item hook');
+    add(scriptS(BUY_ARM), 'buy flow script');
+  }
+  const arrOf = new Map(categories.map((c) => [c.cat, c.arr]));
+  for (const key of Object.keys(cfg.prices)) {
+    const { cat, id } = parseKey(key);
+    if (cat === CAT_EGG) {
+      EGG_ARRAYS.forEach((a, i) => add(a + id * ITEM_RECORD + BUY_PRICE_OFF,
+        i ? 'egg prices, second copy' : 'egg prices'));
+    } else if (arrOf.has(cat)) {
+      add(slusS(arrOf.get(cat)) + id * ITEM_RECORD + BUY_PRICE_OFF, 'item prices');
+    }
+  }
+  return [...roles].sort((a, b) => a[0] - b[0]).map(([lba, role]) => ({ lba, role }));
 }
 
 export function cueFor(binName) {

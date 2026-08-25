@@ -204,12 +204,12 @@ body {
 
 /* What each rewritten sector holds. Dims when its patch is switched off, so
    the map always reflects the options actually selected. */
-/* Exactly six sectors, so the columns are declared rather than auto-fitted --
-   auto-fit leaves a lone orphan cell on a second row at most widths. */
+/* The sector count follows the stock and prices chosen, so the grid fits
+   what it is given; a short final row is accepted. */
 .manifest {
   list-style: none;
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
   gap: 1px;
   margin: 1px 0 0;
   padding: 0;
@@ -526,10 +526,239 @@ body {
   color: var(--muted);
 }
 
+/* ------------------------------------------------------------- the shops */
+
+.shops {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin-bottom: 0.9rem;
+}
+
+.shop {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0 0.95rem;
+  padding: 1rem 1.15rem;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: var(--ink-panel);
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease, opacity 160ms ease;
+}
+
+.shop:hover { border-color: var(--line); background: var(--ink-raised); }
+.shop:focus-within { outline: 2px solid var(--azure); outline-offset: 2px; }
+.shop input[type="checkbox"] { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.shop input:checked + .opt-box { background: var(--azure); border-color: var(--azure); }
+.shop input:checked + .opt-box::after { opacity: 1; transform: rotate(42deg) scale(1); }
+.shop.off .shop-body { opacity: 0.45; }
+.shop.over .shop-count strong { color: var(--rose); }
+
+.shop-body { min-width: 0; }
+.shop-title { display: block; font-weight: 600; }
+
+.shop-count {
+  display: block;
+  margin-top: 0.15rem;
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+
+.shop-count strong { color: var(--jade); font-weight: 500; }
+
+.shop-actions { display: flex; flex-wrap: wrap; gap: 0.32rem; margin-top: 0.65rem; }
+
+/* small utility buttons used throughout the catalog */
+.mini {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.03em;
+  color: var(--azure);
+  background: #4cc9f00d;
+  border: 1px solid #4cc9f033;
+  border-radius: 2px;
+  padding: 0.22rem 0.55rem;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.mini:hover { background: #4cc9f01f; border-color: var(--azure-deep); }
+.mini:focus-visible { outline: 2px solid var(--azure); outline-offset: 2px; }
+
+.file-btn { position: relative; display: inline-block; }
+.file-btn input { position: absolute; inset: 0; opacity: 0; width: 100%; cursor: pointer; }
+
+/* --------------------------------------------------------------- catalog */
+
+.catalog {
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: #0b1322;
+}
+
+.catalog-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.75rem 0.85rem;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.search {
+  flex: 1 1 12rem;
+  min-width: 10rem;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--text);
+  background: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 0.4rem 0.6rem;
+}
+
+.search:focus { outline: 2px solid var(--azure); outline-offset: 1px; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+
+.chip {
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 0.18rem 0.5rem;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+
+.chip:hover { color: var(--text); border-color: var(--azure-deep); }
+.chip.on { color: var(--sand); border-color: #e0a45866; background: #e0a4580f; }
+.chip:focus-visible { outline: 2px solid var(--azure); outline-offset: 2px; }
+
+.chip-n {
+  margin-left: 0.4em;
+  color: var(--jade);
+}
+
+.catalog-bulk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.55rem 0.85rem;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.bulk-label {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-right: 0.3rem;
+}
+
+.bulk-sep { width: 1px; height: 14px; background: var(--line); margin: 0 0.25rem; }
+
+.table-wrap {
+  max-height: 34rem;
+  overflow: auto;
+}
+
+.items {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.items thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #0e1727;
+  font-family: var(--mono);
+  font-weight: 500;
+  font-size: 0.66rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--azure-deep);
+  text-align: left;
+  padding: 0.55rem 0.6rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.items td {
+  padding: 0.3rem 0.6rem;
+  border-bottom: 1px solid var(--line-soft);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.items tr.stocked td { background: #0f1d3166; }
+.items tr:hover td { background: #16223c; }
+
+.items .c-shop { width: 3.4rem; text-align: center; }
+.items .c-shop input { accent-color: var(--azure); width: 15px; height: 15px; cursor: pointer; }
+.items .c-name { font-weight: 500; }
+.items .c-cat { width: 6rem; }
+.items .c-price { width: 6.2rem; }
+.items .c-q { width: 3.6rem; }
+.items .c-note { width: 11rem; white-space: normal; }
+.items .na { color: #3d4a66; text-align: center; }
+
+.price, .quality {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--text);
+  background: var(--ink);
+  border: 1px solid var(--line-soft);
+  border-radius: 2px;
+  padding: 0.22rem 0.4rem;
+  text-align: right;
+}
+
+.price { width: 5.4rem; }
+.quality { width: 3rem; }
+.price:focus, .quality:focus { outline: 2px solid var(--azure); outline-offset: 0; border-color: var(--azure); }
+
+.note {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.02em;
+  padding: 0.05rem 0.35rem;
+  border-radius: 2px;
+  margin-right: 0.25rem;
+}
+
+.note.warn { color: var(--rose); border: 1px solid #f2696b44; background: #f2696b12; }
+.note.info { color: var(--muted); border: 1px solid var(--line); }
+
+.config-io {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.8rem;
+}
+
+.config-note {
+  flex-basis: 100%;
+  margin-top: 0.25rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.config-note code { font-family: var(--mono); font-size: 0.86em; color: var(--azure); }
+
 /* ---------------------------------------------------------------- narrow */
 
 @media (max-width: 60rem) {
-  .manifest { grid-template-columns: repeat(3, 1fr); }
+  .manifest { grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr)); }
+  .items .c-cat { display: none; }
 }
 
 @media (max-width: 34rem) {
@@ -539,6 +768,8 @@ body {
   .discmap-band::after, .discmap-end { display: none; }
   .manifest { grid-template-columns: repeat(2, 1fr); }
   .drop { flex-direction: column; align-items: flex-start; }
+  .shops { grid-template-columns: 1fr; }
+  .items .c-note { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
