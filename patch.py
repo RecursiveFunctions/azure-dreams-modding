@@ -166,7 +166,7 @@ class Image:
 
 def selftest(data: bytes) -> None:
     """Recompute EDC/ECC on untouched sectors; they must come out identical."""
-    for lba in (182, 193, 1883, 5000, 6147, 6149, 6158, 6195, 14930):
+    for lba in (182, 1883, 5000, 6147, 6149, 6158, 6195, 14930):
         base = lba * SECTOR
         orig = bytes(data[base:base + SECTOR])
         if len(orig) < SECTOR or orig[0x12] & 0x20:
@@ -333,14 +333,19 @@ CAT_EGG = 0x12
 EGG_ARRAY_RAM = 0x8002CA68
 EGG_ARRAYS = (0x003ADA68, 0x01D29268)
 
-# Where the stock tables go. Both blocks are zero on disc and untouched in
-# every RAM dump taken across town, both shops, both towns and the tower
-# (docs/FINDINGS.md, "Where a stub can live"). 0x8007bcb0-0x8007bdf0 below
-# Barry's table is reserved for newtown.py's extended gate stub.
-LIST_CAPACITY = 64                 # the shop's list buffer is 0x100 bytes
-MAX_STOCK = LIST_CAPACITY - 2      # minus the header row and terminator
+# Where the stock tables go. A shop's list buffer is 0x100 bytes, so 64
+# entries: the header row, the goods, and the terminator.
+#
+# Barry's table lives in slus_006.14, in the free block at 0x8007bcb0 whose
+# lower part is reserved for newtown.py's extended gate stub (docs/FINDINGS.md,
+# "Where a stub can live"). The monster shop's table lives in its own script
+# chunk, in the apology text the buy flow freed, right after the buy flow (see
+# Patch B). The other slus block, 0x800815b4, reads as zero on disc but is
+# cleared at runtime and cannot hold anything.
+LIST_CAPACITY = 64
+MAX_STOCK = LIST_CAPACITY - 2
 BARRY_TABLE = 0x8007BDF0           # 256 bytes, to 0x8007bef0
-MONSTER_TABLE = 0x800815B4         # 256 bytes, to 0x800816b4
+BARRY_TABLE_WORDS = LIST_CAPACITY
 
 # The "Pay" pseudo-row that draws the menu header. Both shops copy the same
 # four bytes from their own chunk; it has to stay entry 0.
@@ -367,10 +372,10 @@ def stock_word(entry, i):
     return iid | (cat << 8) | ((q & 0xFF) << 16)
 
 
-def build_stock_table(stock):
+def build_stock_table(stock, max_stock=MAX_STOCK):
     """The table a shop's builder copies: header, entries, zero terminator."""
-    if len(stock) > MAX_STOCK:
-        raise SystemExit(f"{len(stock)} items; a shop can list at most {MAX_STOCK}")
+    if len(stock) > max_stock:
+        raise SystemExit(f"{len(stock)} items; this shop can list at most {max_stock}")
     seen = set()
     words = [HEADER_ROW]
     for i, e in enumerate(stock):
@@ -383,9 +388,9 @@ def build_stock_table(stock):
     return words
 
 
-def pad_table(words):
+def pad_table(words, size):
     """Zero the rest of the table's block so a shorter list leaves no stale tail."""
-    return words + [0] * (LIST_CAPACITY - len(words))
+    return words + [0] * (size - len(words))
 
 
 def build_copy_loop(table):
@@ -560,10 +565,10 @@ def apply_barry(img: Image, stock, log) -> None:
     off, lba = stream_to_bin(BARRY_BUILDER)
     log(f"  stock builder  .bin 0x{off:08x}  LBA {lba}  copy loop, {len(stock)} items")
 
-    img.write(slus_s(BARRY_TABLE), words_bytes(pad_table(table)))
+    img.write(slus_s(BARRY_TABLE), words_bytes(pad_table(table, BARRY_TABLE_WORDS)))
     off, lba = stream_to_bin(slus_s(BARRY_TABLE))
     log(f"  stock table    .bin 0x{off:08x}  LBA {lba}  "
-        f"{len(table) * 4} of {LIST_CAPACITY * 4} bytes")
+        f"{len(table) * 4} of {BARRY_TABLE_WORDS * 4} bytes")
 
 
 # ---------------------------------------------------------------------------
@@ -627,6 +632,13 @@ GIVE_WRAPPER_PATCHES = [
 
 BUY_ARM = 0x8001A1B0
 BUY_ARM_LIMIT = 0x8001A3BC     # the "just looking" branch starts here
+
+# The buy flow is 276 bytes; the stock table takes the rest of the freed
+# apology, word-aligned, which is 62 words: header, 60 goods, terminator.
+BUY_ARM_BYTES = 276
+MONSTER_TABLE = BUY_ARM + BUY_ARM_BYTES                 # 0x8001a2c4
+MONSTER_TABLE_WORDS = (BUY_ARM_LIMIT - MONSTER_TABLE) // 4
+MAX_MONSTER_STOCK = MONSTER_TABLE_WORDS - 2
 
 PICKER = 0x80018D1C
 BUY_PRICE = 0x80016770
@@ -692,7 +704,7 @@ def build_buy_arm() -> bytes:
 
 
 def apply_monster_shop(img: Image, stock, log) -> None:
-    table = build_stock_table(stock)
+    table = build_stock_table(stock, MAX_MONSTER_STOCK)
     code = build_copy_loop(MONSTER_TABLE)
 
     head = img.read_u32(code_s(MONSTER_BUILDER))
@@ -705,21 +717,15 @@ def apply_monster_shop(img: Image, stock, log) -> None:
     off, lba = stream_to_bin(code_s(MONSTER_BUILDER))
     log(f"  list builder      .bin 0x{off:08x}  LBA {lba}  copy loop, {len(stock)} items")
 
-    img.write(slus_s(MONSTER_TABLE), words_bytes(pad_table(table)))
-    off, lba = stream_to_bin(slus_s(MONSTER_TABLE))
-    log(f"  stock table       .bin 0x{off:08x}  LBA {lba}  "
-        f"{len(table) * 4} of {LIST_CAPACITY * 4} bytes")
-
     for ram, expect, new, note in GIVE_WRAPPER_PATCHES:
         img.patch_u32(code_s(ram), expect, new, note)
     off, lba = stream_to_bin(code_s(GIVE_WRAPPER))
     log(f"  give-item wrapper .bin 0x{off:08x}  LBA {lba}")
 
     arm = build_buy_arm()
-    if BUY_ARM + len(arm) > BUY_ARM_LIMIT:
-        raise SystemExit(
-            f"buy arm is {len(arm)} bytes, only {BUY_ARM_LIMIT - BUY_ARM} available"
-        )
+    if len(arm) != BUY_ARM_BYTES:
+        raise SystemExit(f"buy arm is {len(arm)} bytes, expected {BUY_ARM_BYTES}; "
+                         "the stock table sits after it")
     cur = img.read(script_s(BUY_ARM), len(arm))
     if cur != arm and not any(cur.startswith(h) for h in BUY_ARM_KNOWN_HEADS):
         raise SystemExit(f"unexpected bytes at buy arm: {cur[:8].hex(' ')}")
@@ -727,6 +733,11 @@ def apply_monster_shop(img: Image, stock, log) -> None:
     off, lba = stream_to_bin(script_s(BUY_ARM))
     log(f"  buy flow script   .bin 0x{off:08x}  LBA {lba}  "
         f"{len(arm)} of {BUY_ARM_LIMIT - BUY_ARM} free bytes")
+
+    img.write(script_s(MONSTER_TABLE), words_bytes(pad_table(table, MONSTER_TABLE_WORDS)))
+    off, lba = stream_to_bin(script_s(MONSTER_TABLE))
+    log(f"  stock table       .bin 0x{off:08x}  LBA {lba}  "
+        f"{len(table) * 4} of {MONSTER_TABLE_WORDS * 4} bytes, after the buy flow")
 
 
 # ---------------------------------------------------------------------------

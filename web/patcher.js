@@ -215,7 +215,7 @@ function bytesEqual(a, b) {
 
 /** Recompute EDC/ECC on untouched sectors; they must come out identical. */
 function selftest(buf) {
-  for (const lba of [182, 193, 1883, 5000, 6147, 6149, 6158, 6195, 14930]) {
+  for (const lba of [182, 1883, 5000, 6147, 6149, 6158, 6195, 14930]) {
     const base = lba * SECTOR;
     if (base + SECTOR > buf.length) continue;
     const orig = buf.slice(base, base + SECTOR);
@@ -272,14 +272,19 @@ const CAT_EGG = 0x12;
 const EGG_ARRAY_RAM = 0x8002ca68;
 const EGG_ARRAYS = [0x003ada68, 0x01d29268];
 
-// Where the stock tables go. Both blocks are zero on disc and untouched in
-// every RAM dump taken across town, both shops, both towns and the tower
-// (docs/FINDINGS.md, "Where a stub can live"). 0x8007bcb0-0x8007bdf0 below
-// Barry's table is reserved for newtown.py's extended gate stub.
-const LIST_CAPACITY = 64;                 // the shop's list buffer is 0x100 bytes
-export const MAX_STOCK = LIST_CAPACITY - 2; // minus the header row and terminator
+// Where the stock tables go. A shop's list buffer is 0x100 bytes, so 64
+// entries: the header row, the goods, and the terminator.
+//
+// Barry's table lives in slus_006.14, in the free block at 0x8007bcb0 whose
+// lower part is reserved for newtown.py's extended gate stub (docs/FINDINGS.md,
+// "Where a stub can live"). The monster shop's table lives in its own script
+// chunk, in the apology text the buy flow freed, right after the buy flow.
+// The other slus block, 0x800815b4, reads as zero on disc but is cleared at
+// runtime and cannot hold anything.
+const LIST_CAPACITY = 64;
+export const MAX_STOCK = LIST_CAPACITY - 2;
 const BARRY_TABLE = 0x8007bdf0;           // 256 bytes, to 0x8007bef0
-const MONSTER_TABLE = 0x800815b4;         // 256 bytes, to 0x800816b4
+const BARRY_TABLE_WORDS = LIST_CAPACITY;
 
 // The "Pay" pseudo-row that draws the menu header. Both shops copy the same
 // four bytes from their own chunk; it has to stay entry 0.
@@ -298,9 +303,9 @@ function stockWord(entry, i) {
 }
 
 /** The table a shop's builder copies: header, entries, zero terminator. */
-function buildStockTable(stock) {
-  if (stock.length > MAX_STOCK) {
-    throw new PatchError(`${stock.length} items; a shop can list at most ${MAX_STOCK}.`);
+function buildStockTable(stock, maxStock = MAX_STOCK) {
+  if (stock.length > maxStock) {
+    throw new PatchError(`${stock.length} items; this shop can list at most ${maxStock}.`);
   }
   const seen = new Set();
   const words = [HEADER_ROW];
@@ -425,15 +430,15 @@ function applyBarry(img, stock, log) {
   let b = streamToBin(BARRY_BUILDER);
   log(`stock builder    ${hexOff(b.off)}  sector ${b.lba}  copy loop, ${stock.length} items`);
 
-  img.write(slusS(BARRY_TABLE), wordsToBytes(padTable(table)));
+  img.write(slusS(BARRY_TABLE), wordsToBytes(padTable(table, BARRY_TABLE_WORDS)));
   b = streamToBin(slusS(BARRY_TABLE));
-  log(`stock table      ${hexOff(b.off)}  sector ${b.lba}  ${table.length * 4} of ${LIST_CAPACITY * 4} bytes`);
+  log(`stock table      ${hexOff(b.off)}  sector ${b.lba}  ${table.length * 4} of ${BARRY_TABLE_WORDS * 4} bytes`);
 }
 
 /** Zero the rest of the table's block so a shorter list leaves no stale tail. */
-function padTable(words) {
+function padTable(words, size) {
   const out = words.slice();
-  while (out.length < LIST_CAPACITY) out.push(0);
+  while (out.length < size) out.push(0);
   return out;
 }
 
@@ -491,6 +496,13 @@ const GIVE_WRAPPER_PATCHES = [
 
 const BUY_ARM = 0x8001a1b0;
 const BUY_ARM_LIMIT = 0x8001a3bc; // the "just looking" branch starts here
+
+// The buy flow is 276 bytes; the stock table takes the rest of the freed
+// apology, word-aligned, which is 62 words: header, 60 goods, terminator.
+const BUY_ARM_BYTES = 276;
+const MONSTER_TABLE = BUY_ARM + BUY_ARM_BYTES;                    // 0x8001a2c4
+const MONSTER_TABLE_WORDS = Math.floor((BUY_ARM_LIMIT - MONSTER_TABLE) / 4);
+export const MAX_MONSTER_STOCK = MONSTER_TABLE_WORDS - 2;
 
 const PICKER = 0x80018d1c;
 const BUY_PRICE = 0x80016770;
@@ -626,7 +638,7 @@ function buildBuyArm() {
 }
 
 function applyMonsterShop(img, stock, log) {
-  const table = buildStockTable(stock);
+  const table = buildStockTable(stock, MAX_MONSTER_STOCK);
   const code = buildCopyLoop(MONSTER_TABLE);
 
   const head = img.readU32(codeS(MONSTER_BUILDER));
@@ -643,10 +655,6 @@ function applyMonsterShop(img, stock, log) {
   let b = streamToBin(codeS(MONSTER_BUILDER));
   log(`list builder     ${hexOff(b.off)}  sector ${b.lba}  copy loop, ${stock.length} items`);
 
-  img.write(slusS(MONSTER_TABLE), wordsToBytes(padTable(table)));
-  b = streamToBin(slusS(MONSTER_TABLE));
-  log(`stock table      ${hexOff(b.off)}  sector ${b.lba}  ${table.length * 4} of ${LIST_CAPACITY * 4} bytes`);
-
   for (const [ram, expect, next, note] of GIVE_WRAPPER_PATCHES) {
     img.patchU32(codeS(ram), expect, next, note);
   }
@@ -654,8 +662,8 @@ function applyMonsterShop(img, stock, log) {
   log(`give-item hook   ${hexOff(b.off)}  sector ${b.lba}`);
 
   const arm = buildBuyArm();
-  if (BUY_ARM + arm.length > BUY_ARM_LIMIT) {
-    throw new PatchError(`Buy flow is ${arm.length} bytes; only ${BUY_ARM_LIMIT - BUY_ARM} fit.`);
+  if (arm.length !== BUY_ARM_BYTES) {
+    throw new PatchError(`Buy flow is ${arm.length} bytes, expected ${BUY_ARM_BYTES}; the stock table sits after it.`);
   }
   const cur = img.read(scriptS(BUY_ARM), arm.length);
   if (!bytesEqual(cur, arm)) {
@@ -671,6 +679,10 @@ function applyMonsterShop(img, stock, log) {
   b = streamToBin(scriptS(BUY_ARM));
   log(`buy flow script  ${hexOff(b.off)}  sector ${b.lba}  ` +
       `${arm.length} of ${BUY_ARM_LIMIT - BUY_ARM} free bytes`);
+
+  img.write(scriptS(MONSTER_TABLE), wordsToBytes(padTable(table, MONSTER_TABLE_WORDS)));
+  b = streamToBin(scriptS(MONSTER_TABLE));
+  log(`stock table      ${hexOff(b.off)}  sector ${b.lba}  ${table.length * 4} of ${MONSTER_TABLE_WORDS * 4} bytes, after the buy flow`);
 }
 
 // ---------------------------------------------------------------------------
@@ -754,9 +766,8 @@ export function planSectors(config, categories) {
   }
   if (cfg.monsterShop.enabled) {
     add(codeS(MONSTER_BUILDER), 'monster shop list builder');
-    add(slusS(MONSTER_TABLE), 'monster shop stock table');
     add(codeS(GIVE_WRAPPER), 'give-item hook');
-    add(scriptS(BUY_ARM), 'buy flow script');
+    add(scriptS(BUY_ARM), 'buy flow script and stock table');
   }
   const arrOf = new Map(categories.map((c) => [c.cat, c.arr]));
   for (const key of Object.keys(cfg.prices)) {

@@ -26,7 +26,7 @@ inject code.
 - **Prices are yours to set.** Buy and sell for every item, with the game's
   own sell values as the default and buying at double. Sand is 1000G to buy.
 
-Nine sectors change for the defaults. Everything else is byte-for-byte the
+Eight sectors change for the defaults. Everything else is byte-for-byte the
 original.
 
 **In a browser** — open `web/index.html`. Pick your `.bin`, tick what each shop
@@ -57,18 +57,17 @@ quality}` (quality is the +N on equipment or the charges on a ball), and a
 | --- | --- | --- |
 | 164 | item prices (slus) | prices |
 | 182 | Barry's stock table | Barry |
-| 193 | monster shop stock table | monster shop |
 | 1883 | egg prices | prices |
 | 6147 | list builder | monster shop |
 | 6149 | give-item hook | monster shop |
-| 6158 | buy flow script | monster shop |
+| 6158 | buy flow script and stock table | monster shop |
 | 6195 | Barry's stock builder | Barry |
 | 14930 | egg prices, second copy | prices |
 
 Each shop's stock used to be a routine that spelled its list out byte by byte.
-It is replaced with a nine-instruction loop that copies a table out of spare
-room in the executable, so the list can be as long as the shop's own 0x100-byte
-buffer allows. Price edits go into the game's item records; eggs are written
+It is replaced with a nine-instruction loop that copies a table: Barry's from
+spare room in the executable, the monster shop's from the apology text its own
+buy flow no longer needs. Barry can list 62 goods, the monster shop 60. Price edits go into the game's item records; eggs are written
 twice because the table exists once for the town and once for the tower.
 
 A stocked item that sells for more than it costs is a money loop. The patcher

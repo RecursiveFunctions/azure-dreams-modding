@@ -1,5 +1,5 @@
 /* Azure Dreams Shop Patcher -- interface wiring. */
-import { patchImage, planSectors, cueFor, PatchError, SECTOR, MAX_STOCK } from './patcher.js';
+import { patchImage, planSectors, cueFor, PatchError, SECTOR, MAX_STOCK, MAX_MONSTER_STOCK } from './patcher.js';
 import { ITEMS, CATEGORIES } from './items.js';
 import {
   CAT_EGG, PRICE_MAX, key, itemByKey, categoryByCat,
@@ -291,9 +291,9 @@ function renderCounts() {
   $('barryCount').textContent = String(b);
   $('monsterCount').textContent = String(m);
   $('barryMax').textContent = String(MAX_STOCK);
-  $('monsterMax').textContent = String(MAX_STOCK);
+  $('monsterMax').textContent = String(MAX_MONSTER_STOCK);
   $('shopBarry').classList.toggle('over', b > MAX_STOCK);
-  $('shopMonster').classList.toggle('over', m > MAX_STOCK);
+  $('shopMonster').classList.toggle('over', m > MAX_MONSTER_STOCK);
   $('shopBarry').classList.toggle('off', !optBarry.checked);
   $('shopMonster').classList.toggle('off', !optMonster.checked);
 }
@@ -462,7 +462,7 @@ function problems() {
   const { b, m } = counts();
   if (!optBarry.checked && !optMonster.checked) return 'pick at least one shop';
   if (optBarry.checked && b > MAX_STOCK) return `Barry can list at most ${MAX_STOCK} items`;
-  if (optMonster.checked && m > MAX_STOCK) return `the monster shop can list at most ${MAX_STOCK} items`;
+  if (optMonster.checked && m > MAX_MONSTER_STOCK) return `the monster shop can list at most ${MAX_MONSTER_STOCK} items`;
   return null;
 }
 
