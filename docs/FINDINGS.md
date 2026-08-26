@@ -117,8 +117,16 @@ The load is two instructions ahead of the store, which the R3000's load
 delay needs. The table is `{header, entries..., 0}` of 4-byte
 `{id, category, quality, 0}` words, with the header `01 16 00 00` copied
 from the vanilla source at `0x80018a98`. Barry's table sits at
-`0x8007bdf0`, the top 256 bytes of the big free block; the monster shop's at
-`0x800815b4`. Both are zero on disc and clean in every RAM dump.
+`0x8007bdf0`, the top 256 bytes of the big free block in slus. The monster
+shop's sits in its own script chunk at `0x8001a2c4`, in the 248 bytes of
+apology text left after the buy flow, so it loads and unloads with the
+overlay and costs no slus space at all.
+
+The second slus block, `0x800815b4`-`0x800816cb`, was tried first and is a
+trap: it is zero on disc and zero in every dump, and a table written there
+reads back as zero at runtime. Something clears it after load. "Zero in every
+dump" cannot distinguish a block nothing touches from one something wipes;
+only writing a pattern and reading it back can.
 
 The quality byte matters for two categories. Balls and equipment go through
 the price routine at `0x8004a4e4`: `price + (price / 10) * quality`, times 5 if
@@ -987,17 +995,30 @@ and three blocks are unclaimed:
 | `0x80079a10`-`0x80079a58` | 72 | 18 |
 
 The first is the useful one and sits at LBA 182 `+0x4b0`. Allocations so far:
-`newtown.py`'s extended gate stub from `0x8007bcb0` (limit `0x8007bdf0`), the
-shop patcher's Barry stock table at `0x8007bdf0`-`0x8007bef0`, and its
-monster shop table at `0x800815b4`-`0x800816b4` in the second block. Note that a run being
+`newtown.py`'s extended gate stub from `0x8007bcb0` (limit `0x8007bdf0`) and
+the shop patcher's Barry stock table at `0x8007bdf0`-`0x8007bef0`. The second
+block is **not usable**: data placed at `0x800815b4` is zero at runtime (see
+"The list is a table now"). Treat the third as unverified until something has
+been read back out of it. Note that a run being
 clean in the dumps is not sufficient on its own either: `0x8007aa88`-`0x8007abd8`
 looks like 336 clean bytes but lies inside the tracer's own location ring, which
 was simply never filled. Check candidates against the known allocation list, not
 just against memory.
 
 Keep taking dumps at new points in play. A region is only as trustworthy as the
-most unusual thing the game has been asked to do while being watched, and none
-of these have yet seen a full tower descent.
+most unusual thing the game has been asked to do while being watched.
+
+**The tower descent has now been done.** Dumps taken on floors 1, 2, 6, 8, 10,
+15 and 20 -- spanning four tileset changes, three music changes, a scripted
+Ghosh encounter and a fresh monster set each time -- leave all three regions
+reading as pure zero. The tower pages in an entirely different overlay set from
+the town, so this is the strongest evidence available short of finishing the
+game, and `0x8007bcb0` can be treated as genuinely free.
+
+A convenience found along the way: the current floor number is a plain byte at
+`0x8008146c`, matching the HUD exactly on every dump. It is in the static part
+of `slus` rather than the per-floor churn, so a stub can read it directly if we
+ever want depth-dependent behaviour.
 
 ## Unused disc space
 
